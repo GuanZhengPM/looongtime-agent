@@ -1,0 +1,27 @@
+{
+	"name": "longtime-agent",
+	"version": "0.1.0",
+	"description": "Long-horizon coding agent harness with durable state and evidence-gated completion",
+	"type": "module",
+	"private": true,
+	"bin": {
+		"longtime": "src/cli.ts"
+	},
+	"scripts": {
+		"start": "bun src/cli.ts",
+		"check": "tsc --noEmit && bun scripts/check-public-tree.ts",
+		"check:public": "bun scripts/check-public-tree.ts",
+		"test": "bun test"
+	},
+	"dependencies": {
+		"@earendil-works/pi-ai": "0.84.2",
+		"@earendil-works/pi-tui": "0.84.2"
+	},
+	"devDependencies": {
+		"@types/bun": "1.3.14",
+		"typescript": "5.9.3"
+	},
+	"engines": {
+		"bun": ">=1.3.14"
+	}
+}
