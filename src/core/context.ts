@@ -5,7 +5,7 @@ import { ensureProofState, evidenceIsCurrent } from "./proof";
 let executorSystemPrompt: string | undefined;
 
 async function loadSystemPrompt(): Promise<string> {
-	executorSystemPrompt ??= await Bun.file(new URL("../prompts/executor.md", import.meta.url)).text();
+	executorSystemPrompt ??= await Bun.file(new URL("../prompts/executor.txt", import.meta.url)).text();
 	return executorSystemPrompt;
 }
 

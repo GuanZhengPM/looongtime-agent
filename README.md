@@ -120,7 +120,7 @@ bun src/cli.ts models <provider>
 - `openai-codex` OAuth 对应 ChatGPT 订阅访问；`openai` API Key 对应 API 按量访问，两者不是同一计费入口。OpenAI 官方 Codex 客户端也区分这两种本地登录方式。
 - `anthropic` 当前是直接 API Key／订阅 OAuth，不是把 Claude Code CLI 当作子进程后端，也不会复用 Claude Code CLI 的自动刷新生命周期。
 - GLM、Qwen 当前按 π Provider 的 Coding/Token Plan API Key 接入；尚未实现从它们各自 CLI 自动导入登录态。
-- Provider 目录和模型可用性会随固定的 `pi-ai` 版本变化；升级依赖前必须重新运行认证和模型回归测试。
+- Provider 目录和模型可用性会随固定的 `pi-ai` 版本变化；升级依赖后建议重新运行认证和模型回归测试。
 
 如果本机 Codex CLI 已执行过 `codex login`，可以选择导入当前会话：
 
@@ -206,7 +206,7 @@ Longtime 的 Provider/TUI 基础来自 [Pi Agent Harness](https://github.com/ear
 
 ### Overview
 
-Long-horizon work requires more than a larger context window. The runtime must preserve task state, track evidence freshness, limit repeated exploration, recover from transient failures, and apply completion criteria that can be independently reviewed.
+Long-horizon work involves more than a larger context window: durable task state, evidence freshness, bounded exploration, transient-failure recovery, and completion criteria that can be independently reviewed.
 
 Longtime organizes a run into recoverable execution frontiers and maintains a `Requirement → Claim → Evidence` proof graph:
 

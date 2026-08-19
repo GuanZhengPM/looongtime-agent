@@ -1,267 +1,425 @@
-# Longtime Harness Architecture
+# Longtime Architecture / Longtime 架构
 
-## 1. 产品边界
+[简体中文](#简体中文) · [English](#english)
 
-Longtime 不是另一个更大的 Prompt，也不是让多个 Agent 无限递归。它是一套位于模型与工作区之间的控制系统。
+---
 
-依赖方向固定为：
+<a id="简体中文"></a>
+
+## 简体中文
+
+### 概览
+
+Longtime 是一个面向长程软件工程任务的 Agent Harness。模型负责分析和执行任务，Harness 负责保存任务状态、管理工具和权限、记录证据、恢复中断的 Run，并判断任务是否完成。
+
+一次 Run 由多个有界 Round 组成。每个 Round 从持久状态生成一份当前工作上下文，模型完成一个 Frontier，工具记录执行结果，Harness 再把有效变化写回状态。
 
 ```text
-Terminal UI -> Application -> Harness Core -> Provider Port
-                                |           -> Workspace Port
-                                |           -> Auditor Port
-                                -> Event Log / State Store
+Goal Contract
+    ↓
+Context Compiler → Executor → Tools / Workspace
+    ↑                           ↓
+Run State ← Progress + Evidence + Completion
+    ↕
+Event Log / Snapshot / Lease
 ```
 
-核心层不能依赖 TUI、具体模型 SDK 或具体文件系统实现。
-
-## 2. 四个必须分离的对象
-
-### 2.1 Transcript 与 State
-
-Transcript 是发生过什么，State 是目前可依赖什么。模型摘要不能直接成为可信状态。
-
-### 2.2 Claim 与 Verified Fact
-
-Executor 的输出默认是 `claim`。只有绑定宿主观察证据，并通过对应审计器后，才能提交为 `verified fact`。
-
-### 2.3 Step Budget 与 Run Budget
-
-单轮模型调用只获得局部额度；所有 Executor、Auditor、恢复轮次和子任务共享 Run 级预算。预算默认是软控制，不以节省 Token 为最高目标。
-
-### 2.4 Online Runtime 与 Offline Evolution
-
-在线运行只应用冻结策略。Harness 的 Prompt、路由、模型画像和阈值通过离线回放与成对评测更新，不在用户任务过程中自我修改。
-
-## 3. Durable State
-
-一个 Run 至少包含：
+### 组件
 
 ```text
-RunState
-  contract        原始目标、要求、约束、停止条件
-  requirements    pending / active / claimed / verified / blocked
-  facts           带证据和 mutation epoch 的可信事实
-  artifacts       文件、测试、构建、页面等可定位产物
-  unknowns        尚未解决的问题
-  conflicts       相互矛盾的观察或并发修改
-  frontier        下一轮允许处理的有界工作
-  progress        最近可信增量和停滞计数
-  health          连续/累计模型错误与最近失败
-  budget          Run 级 Token、时间和工具调用消耗
+CLI / TUI
+   │
+   ▼
+Harness Core
+   ├── Context Compiler
+   ├── Progress Governor
+   ├── Completion Kernel
+   ├── Semantic Audit
+   └── Budget / Permission Policy
+          │
+          ├── ModelPort ── pi-ai Providers
+          ├── Tool Registry ── Workspace / Shell
+          └── RunRepository ── State / Events / Lease
 ```
 
-状态采用 fsync 后原子替换的快照保存，Event Log 采用 append-only JSONL。快照可以重建，事件不可被模型改写。热快照会清理已过期的普通 Evidence 并设硬上限，完整审计仍保留在 Event Log，避免 72 小时运行出现每次保存都复制无限增长数组的二次复杂度。
+| 组件 | 职责 |
+| --- | --- |
+| CLI / TUI | 创建、恢复和查看 Run；显示模型输出、工具执行与状态摘要 |
+| Harness Core | 组织 Round，提交状态变化，处理重试、暂停和完成判定 |
+| ModelPort | 将统一的消息、工具、Usage 和 Session 接口映射到具体 Provider |
+| Tool Registry | 提供文件读取、搜索、写入、Shell 和验证工具 |
+| RunRepository | 保存原子状态快照、append-only Event Log 和单写者租约 |
+| Semantic Audit | 在隔离只读快照上执行可选的同模型审查 |
 
-## 4. Context Compiler
-
-每轮构建新工作集，而不是把全部历史继续塞给模型：
-
-1. 不可变的 Goal Contract；
-2. 当前 Frontier；
-3. 与 Frontier 相关的 verified facts；
-4. 最近的失败和恢复指令；
-5. 必需的原始证据引用；
-6. 本轮工具、权限和输出契约。
-
-完整日志保留在磁盘，由程序检索；自然语言摘要只作为索引，不是事实来源。
-
-Artifacts、Facts、Unknowns、Conflicts 和 Evidence 在模型可见上下文中分别有相位相关上限，同时附总数。超出窗口不等于删除磁盘审计记录。
-
-## 5. Executor
-
-Executor 每轮只能处理一个有界 Frontier。它可以：
-
-- 检查和修改工作区；
-- 运行命令；
-- 提交 Claim；
-- 引用本轮宿主观察到的 Evidence ID；
-- 报告 Unknown、Conflict 或 Blocker。
-
-它不能直接把 Requirement 设为 `verified`，也不能决定整个 Run 已完成。
-
-## 6. ProofGraph、Evidence Ledger 与精确失效
-
-每次写入工作区都会增加 `mutationEpoch`。证据记录：
+### Run 生命周期
 
 ```text
-Evidence {
+create / resume
+      ↓
+load durable state
+      ↓
+compile current context
+      ↓
+execute one frontier
+      ↓
+collect tool evidence
+      ↓
+apply state report
+      ↓
+continue / verify / audit / complete / block
+```
+
+新 Run 从用户目标生成 `GoalContract` 和 Requirements。恢复 Run 时，Longtime 读取已保存的 State 与 Event Log，不依赖模型保留此前完整对话。
+
+每个 Round 结束时，Executor 通过 `report_state` 提交摘要、Requirement、Evidence、Claim、未知项、冲突和下一 Frontier。Harness 对报告进行校验后再更新持久状态。
+
+### 持久状态
+
+`RunState` 保存当前 Run 可继续执行所需的信息：
+
+| 字段 | 内容 |
+| --- | --- |
+| `contract` | 原始目标、Requirements 与约束 |
+| `requirements` | 各项要求的当前状态 |
+| `proof` | Requirement–Claim–Evidence 关系 |
+| `evidence` | 文件、命令、测试、构建和观察结果 |
+| `artifacts` | Run 产生或确认的工作区产物 |
+| `unknowns` / `conflicts` | 尚未解决的问题和冲突 |
+| `frontier` | 下一 Round 的有界工作范围 |
+| `progress` | 最近状态增量与连续停滞计数 |
+| `usage` / `budget` | Token、时间、Round 和工具调用统计 |
+| `health` | 模型错误、重试与最近失败 |
+
+状态快照写入 `state.json`，事件追加到 `events.jsonl`。热状态会压缩已失效的普通 Evidence，Event Log 保留完整事件顺序。
+
+### Context Compiler
+
+Context Compiler 每轮从持久状态构建新的模型上下文，主要包含：
+
+- 不可变的 Goal Contract；
+- 当前 Frontier；
+- 与 Frontier 相关的 Requirements、Claims 和 Evidence；
+- 最近失败与恢复信息；
+- 本轮可用工具、权限和输出格式。
+
+完整历史保存在磁盘，模型上下文只携带当前工作所需的部分。摘要用于导航，Evidence ID 和宿主记录用于状态提交。
+
+### Evidence 与 ProofGraph
+
+工具执行后，Harness 生成 Evidence：
+
+```text
+Evidence
   id
   kind
   source
   subject
   summary
   mutationEpoch
-  observedAt
-  contentHash?
   dependencyPaths?
   globalScope?
-  invalidatedAt?
-}
+  contentHash?
 ```
 
-Executor 可以进一步提交 Requirement–Claim–Evidence 关系：
+Claim 将一个 Requirement 与一组 Evidence 关联：
 
 ```text
 Requirement
-  -> Claim(statement, risk, dependencyPaths)
-       -> Evidence IDs
+  └── Claim
+        ├── statement
+        ├── risk
+        ├── dependencyPaths
+        └── evidenceIds
 ```
 
-读取单个文件产生路径依赖证据；测试、构建和全局搜索默认是 workspace 全局证据。修改 `src/a.ts` 时，与它相关的 Evidence 和 Claim 会变 stale，但 `src/b.ts` 的路径证据仍可继续使用。旧 Run 中没有 dependency metadata 的 Evidence 继续采用原来的全局 Mutation Epoch 语义，保证版本 1 状态可恢复。
+工作区发生写入后，`mutationEpoch` 增加。路径相关 Evidence 只在对应文件变化时失效；测试、构建和全局搜索等 workspace 级 Evidence 在后续修改后失效。Claim 状态为 `proposed`、`supported`、`stale` 或 `rejected`。
 
-当前 Claim 状态为 `proposed / supported / stale / rejected`。Completion Kernel 要求每个 required Requirement 至少存在一个 current supported Claim。
+### 完成判定与语义审计
 
-## 7. Adaptive Audit Router 与 Completion Kernel
+Completion Kernel 根据当前 State 计算结果。完成条件包括：
 
-每轮 `report_state` 后，确定性风险路由器输出：
+- required Requirements 均有 current supported Claim；
+- 工作区修改后存在当前测试、构建或显式验证 Evidence；
+- 没有未解决的完整性错误或开放冲突；
+- Executor 引用的 Evidence ID 当前有效。
 
-1. `continue`：现有证据足够，继续当前单 Executor 路径；
-2. `verify`：最新 mutation 缺少 build/test 等确定性证据；
-3. `semantic_audit`：高风险或语义 Claim、stale proof、反复停滞或证据冲突；
-4. `human_review`：缺少授权、凭据、付款或外部发布权限。
+风险路由器提供四种结果：
 
-`semantic_audit` 现在可以通过 `--semantic-audit shadow` 接入最小 Falsification Auditor：
+| Route | 含义 |
+| --- | --- |
+| `continue` | 继续当前 Frontier |
+| `verify` | 补充测试、构建或显式验证 |
+| `semantic_audit` | 对高风险或语义 Claim 运行独立审查 |
+| `human_review` | 等待外部信息或授权 |
 
-- 验收清单直接锁定自不可变 Goal Contract，不额外调用 Planner；
-- 使用同一 Model Selection，但创建独立 Session，不携带 Executor transcript；
-- 复制最多 100 MiB 的源工作集到临时只读快照，记录 snapshot hash、文件数、字节数和跳过路径；
-- Auditor 只有 `audit_read_file / audit_list_files / audit_search / submit_semantic_audit`；
-- 每条 Requirement 必须引用 Auditor 新生成的 `audit-ev-*`；
-- Audit Evidence 保留 bounded excerpt 与内容 Hash，审计结束再次核对 snapshot hash；
-- `pass` 如果没有覆盖全部 required criteria，会被程序降级为 `inconclusive`；
-- `reject` 如果没有至少一个带新反证的 failed criterion，也会被降级为 `inconclusive`；
-- 当前 shadow verdict 持久化但不影响 Completion Kernel，先用 traces 校准误杀、漏检和 token 开销。
+启用 `--semantic-audit shadow` 后，Auditor 使用相同 Model Selection 和新的 Session，在临时只读快照上检查原始 Requirements。Auditor 只能列出、读取和搜索文件，并通过独立的 `audit-ev-*` Evidence 提交结构化结果。Shadow Verdict 会写入 State 和 Event Log，但不改变当前 Completion 结果。
 
-`human_review` 仍为 advisory；语义 Auditor 的强制门禁属于后续阶段。
+### Progress、Budget 与 Permission
 
-Completion Kernel 由代码执行，只有以下条件同时成立才结束：
+Progress Governor 统计 Requirement、Evidence、Artifact、Unknown 和 Conflict 的变化。连续多个 Round 没有可信状态增量时，Run 进入 blocked 状态并保留恢复说明。
 
-- 所有硬要求已验证；
-- 证据没有因后续修改过期；
-- 没有未解决冲突或完整性违规；
-- 端到端终态检查通过；
-- 需要人工授权的外部动作已经授权。
+预算覆盖 Token、活跃时间、Round、工具调用、单轮超时和连续模型错误。预算阶段为 `normal`、`observe` 和 `reserve`；显式硬上限结束失控运行。
 
-## 8. Progress Governor
+权限模式包括：
 
-长程运行不使用“固定两轮”作为主要停止条件。每轮计算：
+| Mode | 行为 |
+| --- | --- |
+| `autonomous` | 自动执行低、中风险工作区操作；高风险操作需要授权 |
+| `guarded` | 自动执行低风险检查，其余操作请求授权 |
+| `locked` | Shell 操作均请求授权 |
 
-- 新增 verified requirements；
-- 新增有效 evidence；
-- 消除的 unknowns/conflicts；
-- 新增或更新的 artifacts；
-- 重复工具调用和连续失败；
-- Token / wall time / tool call 消耗。
+路径解析会检查工作区边界和符号链接。Shell 可继承外层 Codex Sandbox，或在支持的平台上使用本地沙箱。stdout 与 stderr 使用有界流式捕获。
 
-只要可信状态持续增长，就允许继续。连续无可信增量时依次：
+### 恢复与并发
+
+Longtime 的默认数据目录为 `~/.longtime`：
 
 ```text
-重写 Frontier
-  -> 更换策略或工具
-  -> 回滚到最近 verified checkpoint
-  -> 更换模型（策略允许时）
-  -> 所有自动路径耗尽后才请求用户
+~/.longtime/
+├── config.json
+├── credentials.json
+└── runs/<workspace-key>/<run-id>/
+    ├── state.json
+    ├── events.jsonl
+    ├── run.lock
+    └── runner.log
 ```
 
-## 9. Budget Broker
+一次性 CLI 在收到 SIGINT 或 SIGTERM 时保存 `paused` 状态。`resume` 从最近状态继续执行。`run.lock` 保存 PID、随机 Token 和心跳，同一 Run 同时只有一个写入者；死亡进程遗留的 Lease 可以恢复。
 
-预算分成三段：
+### Provider 与终端
 
-- `normal`：完全自主运行；
-- `observe`：缩小上下文、减少重复审计、降低模型成本；
-- `reserve`：只用于恢复与最终验证。
+Longtime 通过 `@earendil-works/pi-ai` 接入 Provider。ModelPort 统一模型选择、Reasoning、工具调用、Usage、Session 与缓存信息；OAuth 和 API Key 由 Provider 层处理。
 
-硬上限用于防止失控，不作为常规早停条件。运行必须为最终审计保留额度。
+终端提供流式输出与以下主要命令：
 
-模型请求还有独立的单轮超时和指数退避。暂时性错误不会被计入“无进展”，而是记录 `model_failed` / `model_retry_scheduled` 后从最新快照重新编译上下文；认证、未知模型等确定性错误快速失败。
+```text
+/model provider/model-id
+/permission autonomous|guarded|locked
+/allow-risky on|off
+/resume <run-id>
+/status
+/exit
+```
 
-## 10. Permissions
+### 代码位置
 
-权限按影响而非工具名判断：
+| 目录 | 内容 |
+| --- | --- |
+| `src/core/` | Run 循环、状态、ProofGraph、Progress、Budget 与 Semantic Audit |
+| `src/providers/` | pi-ai ModelPort、认证与凭据存储 |
+| `src/tools/` | Workspace、Shell 与工具注册 |
+| `src/ui/` | 终端输出与交互 TUI |
+| `src/cli.ts` | CLI 入口与 Endurance Profiles |
+| `test/` | 状态、恢复、权限、Provider Bridge 与 Auditor 回归测试 |
 
-- 工作区内读取：自动；
-- 工作区内可恢复写入：自动并记录快照；
-- 沙箱内本地测试：自动；
-- 网络读取：按域名策略；
-- 越界读取、不可逆删除、发布、发送、付款、生产写入：请求授权；
-- 同一 Run 中相同授权范围可缓存，避免重复询问。
+---
 
-## 11. Multi-model Strategy
+<a id="english"></a>
 
-模型通过统一 `ModelPort` 接入。Provider 层负责协议差异，Harness 只消费：
+## English
 
-- messages；
-- tools；
-- reasoning/thinking 配置；
-- usage；
-- stop reason；
-- provider session/caching metadata。
+### Overview
 
-模型画像按 `provider + model + protocol + task slice` 保存，不能把一个模型在编码任务中的表现直接推广到 GUI 或研究任务。
+Longtime is an agent harness for long-horizon software-engineering tasks. The model analyzes and executes the task; the harness persists task state, manages tools and permissions, records evidence, recovers interrupted runs, and evaluates completion.
 
-## 12. Terminal UX
+A run consists of bounded rounds. Each round compiles a current working context from durable state, lets the model execute one frontier, records tool results, and commits valid changes back to state.
 
-借鉴 π 的原则：差量渲染、流式输出、可恢复 Session、Slash Commands 和工具状态可见。Longtime 额外突出：
+```text
+Goal Contract
+    ↓
+Context Compiler → Executor → Tools / Workspace
+    ↑                           ↓
+Run State ← Progress + Evidence + Completion
+    ↕
+Event Log / Snapshot / Lease
+```
 
-- 当前 Frontier；
-- Verified / Claimed / Blocked 数量；
-- 最近一次可信状态增量；
-- Run 级 Token 和恢复预算；
-- 当前权限模式；
-- `/pause`、`/resume`、`/state`、`/evidence`、`/why-running`。
+### Components
 
-正常运行不通过弹窗频繁询问用户，只在权限升级或真正需要外部事实时打断。
+```text
+CLI / TUI
+   │
+   ▼
+Harness Core
+   ├── Context Compiler
+   ├── Progress Governor
+   ├── Completion Kernel
+   ├── Semantic Audit
+   └── Budget / Permission Policy
+          │
+          ├── ModelPort ── pi-ai Providers
+          ├── Tool Registry ── Workspace / Shell
+          └── RunRepository ── State / Events / Lease
+```
 
-Shell 执行前后对工作区做轻量元数据快照。无论模型通过结构化写工具还是 Shell 修改文件，都会推进 Mutation Epoch，使此前测试证据失效。stdout/stderr 采用流式有界捕获，只保留头尾和省略量。
+| Component | Responsibility |
+| --- | --- |
+| CLI / TUI | Create, resume, and inspect runs; render model output, tool activity, and state summaries |
+| Harness Core | Orchestrate rounds, commit state changes, handle retries and pauses, and evaluate completion |
+| ModelPort | Map a shared message, tool, usage, and session interface to concrete providers |
+| Tool Registry | Expose file reads, search, writes, shell execution, and verification |
+| RunRepository | Store atomic state snapshots, an append-only event log, and the single-writer lease |
+| Semantic Audit | Run an optional same-model review against an isolated read-only snapshot |
 
-如果 Longtime 运行在 Codex CLI 已有的 `CODEX_SANDBOX` 中，Shell 直接继承外层沙箱，禁止再次嵌套 macOS `sandbox-exec`。否则才建立自己的 Seatbelt/bwrap 沙箱。
+### Run lifecycle
 
-一次性 CLI 捕获 SIGINT/SIGTERM，先保存 `paused` 再退出；后台 `--detach` 使用独立进程组和独立日志。同一 Run 的 `run.lock` 带 PID、token 和心跳，任何时刻只允许一个执行者写状态；死亡进程遗留的锁可恢复。
+```text
+create / resume
+      ↓
+load durable state
+      ↓
+compile current context
+      ↓
+execute one frontier
+      ↓
+collect tool evidence
+      ↓
+apply state report
+      ↓
+continue / verify / audit / complete / block
+```
 
-## 13. 实施阶段
+A new run derives a `GoalContract` and Requirements from the task. A resumed run loads State and the Event Log; it does not depend on the model retaining the full earlier conversation.
 
-当前实现状态：Phase 0 已打通；Phase 1 已实现 ProofGraph、路径依赖 Evidence、兼容旧状态的精确失效、Mutation Epoch、风险路由、最小 same-model shadow Falsification Auditor 与确定性 Completion Kernel；Phase 2 已实现有界 Context Compiler、软预算、暂时性错误恢复、No-progress Recovery 和 24–72h Profile；单写者租约已提前落地。语义审计强制门禁、程序化历史检索、自动换模型、隔离并行和离线进化仍属于后续阶段。
+At the end of each round, the executor calls `report_state` with a summary, Requirements, Evidence, Claims, unknowns, conflicts, and the next frontier. The harness validates the report before updating durable state.
 
-### Phase 0 — 可运行内核
+### Durable state
 
-- 多 Provider 模型调用；
-- 基础终端；
-- 工作区工具；
-- Event Log 与 Run State；
-- Progress Governor；
-- Resume。
+`RunState` contains the information required to continue a run:
 
-### Phase 1 — 可信完成
+| Field | Contents |
+| --- | --- |
+| `contract` | Original objective, Requirements, and constraints |
+| `requirements` | Current status of each requirement |
+| `proof` | Requirement–Claim–Evidence relationships |
+| `evidence` | File, command, test, build, and observation results |
+| `artifacts` | Workspace outputs produced or confirmed by the run |
+| `unknowns` / `conflicts` | Unresolved questions and conflicting observations |
+| `frontier` | Bounded work for the next round |
+| `progress` | Recent state deltas and consecutive stall count |
+| `usage` / `budget` | Token, time, round, and tool-call accounting |
+| `health` | Model errors, retries, and the latest failure |
 
-- Requirement Contract；
-- Evidence Ledger；
-- Requirement–Claim–Evidence ProofGraph；
-- 路径依赖与精确证据失效；
-- Mutation Epoch；
-- Deterministic Auditor；
-- Adaptive Audit Router（advisory）；
-- same-model isolated Falsification Auditor（shadow）；
-- Completion Kernel。
+Snapshots are written to `state.json`; events are appended to `events.jsonl`. Hot state compacts invalidated ordinary Evidence while the Event Log preserves event order.
 
-### Phase 2 — 长程效率
+### Context Compiler
 
-- Context Compiler；
-- Programmatic Retrieval；
-- Soft Budget Broker；
-- No-progress Recovery；
-- 模型切换。
+The Context Compiler builds a fresh model context for every round. It includes:
 
-### Phase 3 — 复杂协作
+- the immutable Goal Contract;
+- the current frontier;
+- Requirements, Claims, and Evidence relevant to that frontier;
+- recent failures and recovery information;
+- available tools, permissions, and the output contract.
 
-- Skill Transition；
-- 隔离工作区；
-- 单写者租约；
-- 只读并行调查与证据化合并。
+Full history remains on disk, while the model context carries the current working set. Summaries support navigation; Evidence IDs and host records support state commits.
 
-### Phase 4 — 离线进化
+### Evidence and ProofGraph
 
-- Trace 回放；
-- 成对消融；
-- 隐藏开发集；
-- Canary 与自动回滚。
+The harness creates Evidence after tool execution:
+
+```text
+Evidence
+  id
+  kind
+  source
+  subject
+  summary
+  mutationEpoch
+  dependencyPaths?
+  globalScope?
+  contentHash?
+```
+
+A Claim associates one Requirement with a set of Evidence:
+
+```text
+Requirement
+  └── Claim
+        ├── statement
+        ├── risk
+        ├── dependencyPaths
+        └── evidenceIds
+```
+
+Each workspace write advances `mutationEpoch`. Path-scoped Evidence becomes stale when its related files change. Workspace-wide Evidence, including tests, builds, and global searches, becomes stale after a later mutation. Claim status is `proposed`, `supported`, `stale`, or `rejected`.
+
+### Completion and semantic audit
+
+The Completion Kernel evaluates the current State. Completion requires:
+
+- a current supported Claim for every required Requirement;
+- current test, build, or explicit verification Evidence after workspace mutations;
+- no unresolved integrity error or open conflict;
+- current Evidence IDs in the executor report.
+
+The risk router produces four routes:
+
+| Route | Meaning |
+| --- | --- |
+| `continue` | Continue with the current frontier |
+| `verify` | Add test, build, or explicit verification evidence |
+| `semantic_audit` | Review a high-risk or semantic Claim independently |
+| `human_review` | Wait for external information or authority |
+
+With `--semantic-audit shadow`, the auditor uses the same Model Selection in a fresh Session and evaluates the original Requirements against a temporary read-only snapshot. Its tools are limited to listing, reading, and searching files, and it submits structured results with independent `audit-ev-*` Evidence. The Shadow Verdict is stored in State and the Event Log without changing the current completion result.
+
+### Progress, budget, and permission
+
+The Progress Governor measures changes to Requirements, Evidence, Artifacts, Unknowns, and Conflicts. After several consecutive rounds without a trusted state delta, the run becomes blocked and retains recovery guidance.
+
+Budgets cover tokens, active time, rounds, tool calls, per-round timeout, and consecutive model errors. Budget phases are `normal`, `observe`, and `reserve`; explicit hard limits stop an unbounded run.
+
+Permission modes are:
+
+| Mode | Behavior |
+| --- | --- |
+| `autonomous` | Run low- and medium-risk workspace actions automatically; request authority for high-risk actions |
+| `guarded` | Run low-risk checks automatically and request authority for other actions |
+| `locked` | Request authority for every shell action |
+
+Path resolution checks workspace boundaries and symlinks. Shell execution can inherit an outer Codex Sandbox or use a local sandbox where supported. stdout and stderr use bounded streaming capture.
+
+### Recovery and concurrency
+
+The default Longtime data directory is `~/.longtime`:
+
+```text
+~/.longtime/
+├── config.json
+├── credentials.json
+└── runs/<workspace-key>/<run-id>/
+    ├── state.json
+    ├── events.jsonl
+    ├── run.lock
+    └── runner.log
+```
+
+The one-shot CLI saves a `paused` state on SIGINT or SIGTERM. `resume` continues from the latest state. `run.lock` stores a PID, random token, and heartbeat so one run has a single writer; a lease left by a dead process can be recovered.
+
+### Providers and terminal
+
+Longtime connects providers through `@earendil-works/pi-ai`. ModelPort normalizes model selection, reasoning, tool calls, usage, sessions, and cache metadata. OAuth and API-key handling remain in the provider layer.
+
+The terminal provides streaming output and these primary commands:
+
+```text
+/model provider/model-id
+/permission autonomous|guarded|locked
+/allow-risky on|off
+/resume <run-id>
+/status
+/exit
+```
+
+### Code map
+
+| Directory | Contents |
+| --- | --- |
+| `src/core/` | Run loop, state, ProofGraph, progress, budget, and semantic audit |
+| `src/providers/` | pi-ai ModelPort, authentication, and credential storage |
+| `src/tools/` | Workspace, shell execution, and tool registration |
+| `src/ui/` | Terminal output and interactive TUI |
+| `src/cli.ts` | CLI entry point and endurance profiles |
+| `test/` | Regression tests for state, recovery, permissions, provider bridge, and auditor |
