@@ -13,9 +13,10 @@ import { parseModelSelection } from "../config";
 import { runHarness, type HarnessObserver } from "../core/harness";
 import { RunRepository } from "../core/repository";
 import { createRunState } from "../core/state";
-import type { ModelSelection, PermissionMode, RunEvent, RunState } from "../core/types";
+import type { ModelSelection, PermissionMode, RunEvent, RunState, SemanticAuditMode } from "../core/types";
 import type { PiModelsPort } from "../providers/pi-models";
 import { createTools } from "../tools/registry";
+import { Workspace } from "../tools/workspace";
 
 const ansi = {
 	cyan: (text: string) => `\u001b[36m${text}\u001b[39m`,
@@ -47,6 +48,8 @@ export interface InteractiveOptions {
 	workspace: string;
 	model?: ModelSelection;
 	permissionMode: PermissionMode;
+	semanticAuditMode: SemanticAuditMode;
+	allowNetwork: boolean;
 	modelPort: PiModelsPort;
 }
 
@@ -60,7 +63,7 @@ function runStatus(event: RunEvent): string | undefined {
 		return `progress +${String(delta?.score ?? 0)} · stalled ${String(event.payload.stalledRounds)}`;
 	}
 	if (event.type === "audit_routed") return `audit ${String(event.payload.route)} · risk ${String(event.payload.riskScore)}`;
-	if (event.type === "semantic_audit_started") return "semantic audit shadow started";
+	if (event.type === "semantic_audit_started") return "semantic audit started";
 	if (event.type === "semantic_audit_completed") return `semantic audit ${String(event.payload.verdict ?? event.payload.status)}`;
 	if (event.type === "run_completed") return "verified completion";
 	if (event.type === "run_blocked") return `blocked · ${String(event.payload.reason)}`;
@@ -82,6 +85,8 @@ export async function runInteractive(options: InteractiveOptions): Promise<void>
 	const editor = new Editor(tui, editorTheme, { paddingX: 0 });
 	let selectedModel = options.model;
 	let permissionMode = options.permissionMode;
+	let semanticAuditMode = options.semanticAuditMode;
+	let allowNetwork = options.allowNetwork;
 	let allowHighRisk = false;
 	let activeController: AbortController | undefined;
 	let cancelAuthorization: (() => void) | undefined;
@@ -91,13 +96,13 @@ export async function runInteractive(options: InteractiveOptions): Promise<void>
 
 	const updateHeader = (): void => {
 		header.setText(
-			`${ansi.bold("Longtime")}  ${selectedModel ? `${selectedModel.provider}/${selectedModel.modelId}` : "no model"}  ${permissionMode}${allowHighRisk ? "  high-risk authorized" : ""}`,
+			`${ansi.bold("Longtime")}  ${selectedModel ? `${selectedModel.provider}/${selectedModel.modelId}` : "no model"}  ${permissionMode}  audit:${semanticAuditMode}  network:${allowNetwork ? "on" : "off"}${allowHighRisk ? "  high-risk authorized" : ""}`,
 		);
 		tui.requestRender();
 	};
 	updateHeader();
 	transcript.addChild(header);
-	transcript.addChild(new Text(ansi.dim("/model provider/model · /resume id · /permission mode · /allow-risky on|off · /status · /exit")));
+	transcript.addChild(new Text(ansi.dim("/model provider/model · /resume id · /permission mode · /audit mode · /network on|off · /allow-risky on|off · /status · /exit")));
 	transcript.addChild(new Spacer(1));
 	tui.addChild(transcript);
 	tui.addChild(status);
@@ -131,7 +136,7 @@ export async function runInteractive(options: InteractiveOptions): Promise<void>
 		const choices = new SelectList(
 			[
 				{ value: "deny", label: "Deny", description: "Keep the run inside current permissions" },
-				{ value: "allow", label: "Authorize once", description: "Run this command outside the normal sandbox" },
+				{ value: "allow", label: "Authorize once", description: "Run once; the sandbox remains active when available" },
 			],
 			2,
 			editorTheme.selectList,
@@ -222,6 +227,21 @@ export async function runInteractive(options: InteractiveOptions): Promise<void>
 			updateHeader();
 			return true;
 		}
+		if (command === "/audit") {
+			const mode = parts[0];
+			if (mode !== "off" && mode !== "shadow" && mode !== "gate") {
+				throw new Error("Usage: /audit off|shadow|gate");
+			}
+			semanticAuditMode = mode;
+			updateHeader();
+			return true;
+		}
+		if (command === "/network") {
+			if (parts[0] !== "on" && parts[0] !== "off") throw new Error("Usage: /network on|off");
+			allowNetwork = parts[0] === "on";
+			updateHeader();
+			return true;
+		}
 		if (command === "/allow-risky") {
 			if (parts[0] !== "on" && parts[0] !== "off") throw new Error("Usage: /allow-risky on|off");
 			allowHighRisk = parts[0] === "on";
@@ -240,6 +260,8 @@ export async function runInteractive(options: InteractiveOptions): Promise<void>
 			if (state.status === "completed") throw new Error("Completed runs cannot be resumed.");
 			if (selectedModel) state.model = structuredClone(selectedModel);
 			state.permissionMode = permissionMode;
+			state.semanticAuditMode = semanticAuditMode;
+			state.allowNetwork = allowNetwork;
 			state.status = "running";
 			state.progress.stalledRounds = 0;
 			await repository.append(state, "run_resumed", { model: state.model, source: "interactive" });
@@ -265,7 +287,13 @@ export async function runInteractive(options: InteractiveOptions): Promise<void>
 					workspace: options.workspace,
 					model: selectedModel,
 					permissionMode,
+					semanticAuditMode,
+					allowNetwork,
 				});
+				const initialFingerprint = await (await Workspace.open(state.workspace)).fingerprint();
+				state.baselineWorkspaceFingerprint = initialFingerprint;
+				state.workspaceFingerprint = initialFingerprint;
+				state.workspaceFingerprintAt = Date.now();
 				const repository = new RunRepository(state.workspace, state.id);
 				await repository.append(state, "run_created", {
 					objective: state.contract.objective,

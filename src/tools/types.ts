@@ -17,6 +17,7 @@ export interface ToolExecutionContext {
 	repository: RunRepository;
 	signal: AbortSignal;
 	permissionMode: PermissionMode;
+	allowNetwork?: boolean;
 	authorize?: (input: { command: string; risk: ShellRisk; reason: string }) => boolean | Promise<boolean>;
 }
 

@@ -36,6 +36,13 @@ function toolCallArguments(call: ToolCall): Record<string, unknown> {
 		: {};
 }
 
+function boundedToolResult(text: string, limit = 24_000): string {
+	if (text.length <= limit) return text;
+	const evidenceTags = [...text.matchAll(/\[(?:audit-)?evidence:[^\]]+\]/g)].map(match => match[0]);
+	const half = Math.floor((limit - 200) / 2);
+	return `${text.slice(0, half)}\n... ${text.length - half * 2} tool-result characters omitted from model context ...\n${text.slice(-half)}\n${[...new Set(evidenceTags)].join("\n")}`;
+}
+
 function resolveModel(models: Models, provider: string, modelId: string): Model<Api> {
 	const model = models.getModel(provider, modelId);
 	if (!model) throw new Error(`Unknown model '${provider}/${modelId}'. Use 'longtime models ${provider}' to inspect models.`);
@@ -224,7 +231,7 @@ export class PiModelsPort implements ModelPort {
 					role: "toolResult",
 					toolCallId: call.id,
 					toolName: call.name,
-					content: [{ type: "text", text: result.text }],
+					content: [{ type: "text", text: boundedToolResult(result.text) }],
 					isError: result.isError,
 					timestamp: Date.now(),
 				});

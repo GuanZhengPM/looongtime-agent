@@ -35,12 +35,12 @@ Goal Contract
 ### 核心能力
 
 - **长程调度**：只要存在可信状态增量就继续执行；持续停滞、预算耗尽或缺少必要权限时进入阻塞状态。
-- **完成判定**：Executor 提交完成声明，确定性 Completion Kernel 根据当前宿主证据决定是否接受。
+- **完成判定**：普通 Shell 成功只作为诊断；修改工作区后，只有受识别或提前锁定的 `verify` 命令才能产生完成证据，并且必须映射到具体 Requirement；修复/实现类目标还必须保留相对初始指纹的净工作区变化。
 - **ProofGraph**：每个必需 Requirement 都需要受 Evidence 支持的 Claim；相关文件变化会使对应证明精确失效。
-- **故障恢复**：原子状态快照、append-only Event Log、租约、心跳、暂停与跨进程恢复共同维护 Run 一致性。
-- **预算治理**：Token、活跃时间、Round、工具调用、单轮超时、重试和停滞分别设限。
-- **权限策略**：工作区内可逆操作默认自主执行；高影响 Shell、边界外访问和外部副作用需要显式授权。
-- **语义审计**：`shadow` 模式在高风险完成声明出现时，以同一模型的新 Session 审查隔离只读快照。
+- **故障恢复**：原子状态快照、前一快照备份、同步 Event Log、租约、心跳、暂停与跨进程恢复共同维护 Run 一致性；恢复和每轮开始时会检查外部工作区变化并失效旧证明。
+- **预算治理**：Token、费用、活跃时间、Round、工具调用、单轮超时、重试和停滞分别设限。
+- **权限策略**：工作区内可逆操作默认自主执行；高影响 Shell、边界外访问和外部副作用需要显式授权；本地沙箱默认禁网。
+- **语义审计**：`shadow` 只记录审计结果；`gate` 要求高风险语义完成获得当前 `pass` Verdict；可用 `--audit-model` 选择不同模型以减少共同盲点。
 - **多 Provider 接入**：模型与认证基于固定版本的 [`@earendil-works/pi-ai`](https://github.com/earendil-works/pi)，核心状态机不绑定单一模型协议。
 
 ### 安装
@@ -85,7 +85,13 @@ bun src/cli.ts auth status openai-codex
 bun src/cli.ts run \
   --model openai-codex/gpt-5.6-sol \
   --reasoning high \
-  --semantic-audit shadow \
+  --semantic-audit gate \
+  --audit-model anthropic/claude-sonnet-4-5 \
+  --require "登录成功时返回有效 token" \
+  --constraint "不得改变公开 API" \
+  --verify-command "bun test auth.test.ts" \
+  --require-change \
+  --max-cost 25 \
   --cwd /path/to/project \
   "修复认证模块并运行相关测试，直到有当前证据证明完成"
 ```
@@ -179,6 +185,8 @@ bun src/cli.ts resume --model openai/gpt-5.4 <run-id>
 
 - Longtime 不是容器或虚拟机；它默认拥有启动用户在工作区内的权限。
 - 路径和符号链接会做工作区边界检查，但强隔离仍应由容器、VM 或专用系统账户提供。
+- 支持的本地沙箱默认禁止网络；只有显式 `--allow-network` 才会开放，恢复 Run 时可用 `--deny-network` 再次关闭。继承的外层沙箱仍以外层策略为准。
+- Shell 环境不会继承 Provider Secret，本地沙箱会屏蔽常见凭据目录及 `~/.longtime`；这仍不能替代容器或 VM。
 - `runner.log`、状态和 Event Log 可能包含源码片段、命令与模型输出，不应提交到公开仓库。
 - `--allow-high-risk` 是显式预授权，不应在包含真实凭据或不可恢复数据的工作区使用。
 - `auth status` 当前只确认凭据存在且可解析／可刷新；首个模型请求才验证服务端是否接受。
@@ -224,12 +232,12 @@ The model owns exploration, reasoning, and implementation. The harness owns stat
 ### What it provides
 
 - **Long-horizon scheduling**: continue while trusted state changes are being produced; block on sustained stalls, exhausted budgets, or missing authority.
-- **Completion policy**: the executor submits a completion claim; a deterministic kernel evaluates it against current host evidence.
+- **Completion policy**: ordinary Shell success is diagnostic only. After workspace mutation, completion requires recognized or contract-locked `verify` evidence mapped to each Requirement; fix/implement-style goals also require a net workspace change from the starting fingerprint.
 - **ProofGraph**: each required requirement needs a supported claim, and relevant mutations precisely invalidate stale proof.
-- **Durable recovery**: atomic snapshots, append-only events, leases, heartbeats, pause, and cross-process resume preserve run consistency.
-- **Budget governance**: tokens, active time, rounds, tool calls, round timeouts, retries, and stalls have separate limits.
-- **Permission policy**: reversible workspace-local actions run autonomously; high-impact shell commands, boundary crossings, and external effects require explicit authority.
-- **Semantic audit**: `shadow` mode starts a fresh same-model session against an isolated read-only snapshot for risky completion claims.
+- **Durable recovery**: atomic snapshots, a previous-snapshot fallback, synchronized events, leases, heartbeats, pause, and workspace reconciliation preserve recoverability.
+- **Budget governance**: tokens, cost, active time, rounds, tool calls, round timeouts, retries, and stalls have separate limits.
+- **Permission policy**: reversible workspace-local actions run autonomously; high-impact operations require authority and local sandboxes deny network access by default.
+- **Semantic audit**: `shadow` records advisory results; `gate` requires a current passing verdict, and `--audit-model` can use a different model to reduce shared blind spots.
 - **Multi-provider integration**: model protocols and authentication come from a pinned [`@earendil-works/pi-ai`](https://github.com/earendil-works/pi) version while the durable state machine remains provider-neutral.
 
 ### Install
@@ -269,7 +277,13 @@ Run a task:
 bun src/cli.ts run \
   --model openai-codex/gpt-5.6-sol \
   --reasoning high \
-  --semantic-audit shadow \
+  --semantic-audit gate \
+  --audit-model anthropic/claude-sonnet-4-5 \
+  --require "successful login returns a valid token" \
+  --constraint "do not change the public API" \
+  --verify-command "bun test auth.test.ts" \
+  --require-change \
+  --max-cost 25 \
   --cwd /path/to/project \
   "Fix the authentication module and run the relevant tests until current evidence proves completion"
 ```
@@ -357,6 +371,8 @@ Recovery compiles the Goal Contract, Verified State, Evidence, and Frontier. It 
 
 - Longtime is not a container or VM; it runs with the launching user's permissions.
 - Workspace path and symlink checks are defense in depth, not strong isolation. Use a container, VM, or dedicated OS account for hostile tasks.
+- Supported local sandboxes deny network access by default; `--allow-network` is explicit and `--deny-network` revokes it on resume. An inherited outer sandbox retains its own policy.
+- Provider secrets are removed from the Shell environment and common credential directories are masked locally, but this is not a replacement for a container or VM.
 - State, events, and `runner.log` may contain source snippets, commands, and model output. Do not publish them blindly.
 - `--allow-high-risk` is explicit preauthorization and should not be used around irreplaceable data or real secrets.
 - `auth status` checks credential presence and local refreshability. The first model request is the current live server-side acceptance check.
