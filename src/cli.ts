@@ -11,6 +11,7 @@ import { PiModelsPort } from "./providers/pi-models";
 import { longtimeModel } from "./paths";
 import { runAuthCommand } from "./providers/auth-cli";
 import { createTools } from "./tools/registry";
+import { Workspace } from "./tools/workspace";
 import { createTerminalObserver, printRunSummary } from "./ui/terminal";
 import { runInteractive } from "./ui/interactive";
 
@@ -30,11 +31,16 @@ Usage:
 
 Run options:
   --model <provider/model-id>     Model from the pi-ai catalog
+  --audit-model <provider/model>  Model used for semantic audit (default: executor model)
   --reasoning <level>            minimal|low|medium|high|xhigh|max
   --cwd <path>                   Workspace (default: current directory)
   --permission <mode>            autonomous|guarded|locked
-  --semantic-audit <mode>        off|shadow (fresh same-model read-only audit)
+  --semantic-audit <mode>        off|shadow|gate (gate can reject completion)
   --require <criterion>          Add a hard requirement; may repeat
+  --constraint <text>            Add a locked task constraint; may repeat
+  --verify-command <command>     Allow a task-specific completion command; may repeat
+  --require-change               Require a net workspace change before completion
+  --allow-no-change              Allow evidence-only completion for an analysis/check task
   --max-tokens <number>          Run-level hard token limit
   --observe-after <number>       Enter token-observation mode
   --max-stalls <number>          Consecutive no-progress rounds before blocking
@@ -44,7 +50,10 @@ Run options:
   --max-tools <number>           Maximum host tool calls
   --max-retries <number>         Consecutive transient model errors to retry
   --round-timeout-minutes <n>    Timeout for one model/tool round
+  --max-cost <usd>               Stop when recorded model cost reaches this USD limit
   --detach                       Run independently of the current terminal
+  --allow-network                Permit sandboxed tools to access the network
+  --deny-network                 Disable network access when resuming a run
   --allow-high-risk              Pre-authorize high-risk shell commands
   --quiet                        Hide streaming model/tool output
 
@@ -56,18 +65,24 @@ Environment:
 
 const REASONING_LEVELS = ["minimal", "low", "medium", "high", "xhigh", "max"] as const;
 const PERMISSION_MODES = ["autonomous", "guarded", "locked"] as const;
-const SEMANTIC_AUDIT_MODES = ["off", "shadow"] as const;
+const SEMANTIC_AUDIT_MODES = ["off", "shadow", "gate"] as const;
 
 interface RunArguments {
 	model?: string;
+	auditModel?: string;
 	reasoning?: ModelSelection["reasoning"];
 	cwd: string;
+	cwdSpecified: boolean;
 	permission?: PermissionMode;
 	semanticAuditMode?: SemanticAuditMode;
 	requirements: string[];
+	constraints: string[];
+	verificationCommands: string[];
+	requiresWorkspaceChange?: boolean;
 	budget: Partial<BudgetConfig>;
 	enduranceHours?: 24 | 48 | 72;
 	allowHighRisk: boolean;
+	networkOverride?: boolean;
 	detach: boolean;
 	quiet: boolean;
 	positionals: string[];
@@ -97,6 +112,12 @@ function positiveInteger(value: string, label: string): number {
 	return parsed;
 }
 
+function positiveNumber(value: string, label: string): number {
+	const parsed = Number(value);
+	if (!Number.isFinite(parsed) || parsed <= 0) throw new Error(`${label} must be a positive number.`);
+	return parsed;
+}
+
 function enduranceHours(value: string): 24 | 48 | 72 {
 	const normalized = value.toLowerCase().replace(/h$/, "");
 	const parsed = Number(normalized);
@@ -119,6 +140,7 @@ function enduranceBudget(hours: 24 | 48 | 72): Partial<BudgetConfig> {
 		modelRetryBaseDelayMs: 2_000,
 		modelRetryMaxDelayMs: 120_000,
 		maxRoundTimeMs: 45 * 60_000,
+		maxCostUsd: hours === 24 ? 250 : hours === 48 ? 500 : 1_000,
 	};
 }
 
@@ -131,7 +153,10 @@ function requiredValue(args: string[], index: number, option: string): string {
 function parseRunArguments(args: string[]): RunArguments {
 	const result: RunArguments = {
 		cwd: process.cwd(),
+		cwdSpecified: false,
 		requirements: [],
+		constraints: [],
+		verificationCommands: [],
 		budget: {},
 		allowHighRisk: false,
 		detach: false,
@@ -141,13 +166,25 @@ function parseRunArguments(args: string[]): RunArguments {
 	for (let index = 0; index < args.length; index += 1) {
 		const arg = args[index];
 		if (arg === "--model") result.model = requiredValue(args, ++index, arg);
+		else if (arg === "--audit-model") result.auditModel = requiredValue(args, ++index, arg);
 		else if (arg === "--reasoning") result.reasoning = parseReasoning(requiredValue(args, ++index, arg));
-		else if (arg === "--cwd") result.cwd = path.resolve(requiredValue(args, ++index, arg));
+		else if (arg === "--cwd") {
+			result.cwd = path.resolve(requiredValue(args, ++index, arg));
+			result.cwdSpecified = true;
+		}
 		else if (arg === "--permission") result.permission = parsePermission(requiredValue(args, ++index, arg));
 		else if (arg === "--semantic-audit")
 			result.semanticAuditMode = parseSemanticAuditMode(requiredValue(args, ++index, arg));
 		else if (arg === "--require") result.requirements.push(requiredValue(args, ++index, arg));
-		else if (arg === "--max-tokens")
+		else if (arg === "--constraint") result.constraints.push(requiredValue(args, ++index, arg));
+		else if (arg === "--verify-command") result.verificationCommands.push(requiredValue(args, ++index, arg));
+		else if (arg === "--require-change") {
+			if (result.requiresWorkspaceChange === false) throw new Error("--require-change conflicts with --allow-no-change.");
+			result.requiresWorkspaceChange = true;
+		} else if (arg === "--allow-no-change") {
+			if (result.requiresWorkspaceChange === true) throw new Error("--allow-no-change conflicts with --require-change.");
+			result.requiresWorkspaceChange = false;
+		} else if (arg === "--max-tokens")
 			result.budget.hardTokenLimit = positiveInteger(requiredValue(args, ++index, arg), arg);
 		else if (arg === "--observe-after")
 			result.budget.observeAfterTokens = positiveInteger(requiredValue(args, ++index, arg), arg);
@@ -164,13 +201,19 @@ function parseRunArguments(args: string[]): RunArguments {
 			result.budget.maxConsecutiveModelErrors = positiveInteger(requiredValue(args, ++index, arg), arg);
 		else if (arg === "--round-timeout-minutes")
 			result.budget.maxRoundTimeMs = positiveInteger(requiredValue(args, ++index, arg), arg) * 60_000;
+		else if (arg === "--max-cost")
+			result.budget.maxCostUsd = positiveNumber(requiredValue(args, ++index, arg), arg);
 		else if (arg === "--detach") result.detach = true;
+		else if (arg === "--allow-network") result.networkOverride = true;
+		else if (arg === "--deny-network") result.networkOverride = false;
 		else if (arg === "--allow-high-risk") result.allowHighRisk = true;
 		else if (arg === "--quiet") result.quiet = true;
 		else if (arg?.startsWith("--")) throw new Error(`Unknown option '${arg}'.`);
 		else if (arg) result.positionals.push(arg);
 	}
 	result.requirements = result.requirements.map(item => item.trim()).filter(Boolean);
+	result.constraints = result.constraints.map(item => item.trim()).filter(Boolean);
+	result.verificationCommands = result.verificationCommands.map(item => item.trim()).filter(Boolean);
 	if (result.enduranceHours) result.budget = { ...enduranceBudget(result.enduranceHours), ...result.budget };
 	return result;
 }
@@ -249,11 +292,24 @@ async function runNew(args: string[]): Promise<void> {
 		objective: await readTask(parsed.positionals),
 		workspace: parsed.cwd,
 		model: await selectedModel(parsed),
+		...(parsed.auditModel
+			? { auditModel: parseModelSelection(parsed.auditModel, parsed.reasoning ?? config.reasoning ?? "high") }
+			: {}),
 		permissionMode: parsed.permission ?? config.permissionMode ?? "autonomous",
 		semanticAuditMode: parsed.semanticAuditMode ?? config.semanticAuditMode ?? "off",
+		allowNetwork: parsed.networkOverride ?? false,
 		...(parsed.requirements.length > 0 ? { requirements: parsed.requirements } : {}),
+		...(parsed.constraints.length > 0 ? { constraints: parsed.constraints } : {}),
+		...(parsed.verificationCommands.length > 0 ? { verificationCommands: parsed.verificationCommands } : {}),
+		...(parsed.requiresWorkspaceChange !== undefined
+			? { requiresWorkspaceChange: parsed.requiresWorkspaceChange }
+			: {}),
 		budget: parsed.budget,
 	});
+	const initialFingerprint = await (await Workspace.open(state.workspace)).fingerprint();
+	state.baselineWorkspaceFingerprint = initialFingerprint;
+	state.workspaceFingerprint = initialFingerprint;
+	state.workspaceFingerprintAt = Date.now();
 	const repository = new RunRepository(state.workspace, state.id);
 	await repository.append(state, "run_created", {
 		objective: state.contract.objective,
@@ -286,12 +342,28 @@ async function resume(args: string[]): Promise<void> {
 	const repository = await RunRepository.find(runId);
 	const state = await repository.load();
 	if (state.status === "completed") throw new Error("Completed runs cannot be resumed.");
+	if (parsed.cwdSpecified && parsed.cwd !== state.workspace) {
+		throw new Error("A resumed run cannot move to a different locked workspace.");
+	}
+	if (parsed.requirements.length > 0 || parsed.constraints.length > 0 || parsed.verificationCommands.length > 0) {
+		throw new Error("A resumed run cannot change its locked requirements, constraints, or verification commands.");
+	}
 	if (parsed.model || parsed.reasoning) {
 		const current = `${state.model.provider}/${state.model.modelId}`;
 		state.model = parseModelSelection(parsed.model ?? current, parsed.reasoning ?? state.model.reasoning);
 	}
+	if (parsed.auditModel) {
+		state.auditModel = parseModelSelection(parsed.auditModel, parsed.reasoning ?? state.model.reasoning);
+	}
 	if (parsed.permission) state.permissionMode = parsed.permission;
 	if (parsed.semanticAuditMode) state.semanticAuditMode = parsed.semanticAuditMode;
+	if (
+		parsed.requiresWorkspaceChange !== undefined &&
+		parsed.requiresWorkspaceChange !== state.contract.requiresWorkspaceChange
+	) {
+		throw new Error("A resumed run cannot change its locked workspace-change requirement.");
+	}
+	if (parsed.networkOverride !== undefined) state.allowNetwork = parsed.networkOverride;
 	applyBudgetOverrides(state, parsed.budget);
 	state.status = "running";
 	state.progress.stalledRounds = 0;
@@ -354,6 +426,8 @@ async function main(): Promise<void> {
 			workspace: process.cwd(),
 			...(configured ? { model: parseModelSelection(configured, config.reasoning ?? "high") } : {}),
 			permissionMode: config.permissionMode ?? "autonomous",
+			semanticAuditMode: config.semanticAuditMode ?? "off",
+			allowNetwork: false,
 			modelPort: new PiModelsPort(),
 		});
 		return;
@@ -372,6 +446,8 @@ async function main(): Promise<void> {
 				? { model: parseModelSelection(modelValue, parsed.reasoning ?? config.reasoning ?? "high") }
 				: {}),
 			permissionMode: parsed.permission ?? config.permissionMode ?? "autonomous",
+			semanticAuditMode: parsed.semanticAuditMode ?? config.semanticAuditMode ?? "off",
+			allowNetwork: parsed.networkOverride ?? false,
 			modelPort: new PiModelsPort(),
 		});
 	} else if (command === "run") await runNew(args);

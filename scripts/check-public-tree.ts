@@ -2,7 +2,17 @@ import * as fs from "node:fs/promises";
 import * as path from "node:path";
 
 const root = path.resolve(import.meta.dir, "..");
-const publicEntries = ["README.md", "package.json", "src", "test", "docs"];
+const publicEntries = [
+	"README.md",
+	"SECURITY.md",
+	"CONTRIBUTING.md",
+	"CHANGELOG.md",
+	"package.json",
+	"src",
+	"test",
+	"docs",
+	".github",
+];
 const forbiddenFileNames = new Set([".env", "auth.json", "credentials.json"]);
 const forbiddenSuffixes = [".har", ".jsonl", ".log", ".p12", ".pem", ".pfx", ".trace"];
 const contentRules: Array<{ label: string; pattern: RegExp }> = [

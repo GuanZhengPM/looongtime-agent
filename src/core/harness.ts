@@ -7,8 +7,9 @@ import { applyStateReport, commitCompletion, decideCompletion } from "./state";
 import type { BudgetUsage, RunEvent, RunState, StateReport } from "./types";
 import type { ExecutableTool, ToolExecutionContext } from "../tools/types";
 import { findTool } from "../tools/registry";
-import { assessAuditRisk } from "./proof";
+import { assessAuditRisk, recordMutation } from "./proof";
 import { runShadowSemanticAudit } from "./semantic-audit";
+import { Workspace } from "../tools/workspace";
 
 export interface HarnessObserver {
 	onEvent?: (event: RunEvent) => void;
@@ -71,6 +72,37 @@ async function appendEvent(
 	options.observer?.onEvent?.(event);
 }
 
+async function currentWorkspaceFingerprint(workspace: string): Promise<string> {
+	return await (await Workspace.open(workspace)).fingerprint();
+}
+
+async function reconcileWorkspace(options: HarnessRunOptions, reason: string): Promise<boolean> {
+	const fingerprint = await currentWorkspaceFingerprint(options.state.workspace);
+	const previous = options.state.workspaceFingerprint;
+	options.state.baselineWorkspaceFingerprint ??= previous ?? fingerprint;
+	options.state.workspaceFingerprint = fingerprint;
+	options.state.workspaceFingerprintAt = Date.now();
+	if (!previous) {
+		await appendEvent(options, "workspace_reconciled", { reason, initialized: true, fingerprint });
+		await options.repository.save(options.state);
+		return false;
+	}
+	if (previous === fingerprint) return false;
+	const invalidation = recordMutation(options.state, ["*"], `External workspace change detected during ${reason}`);
+	options.state.artifacts = [];
+	await appendEvent(options, "workspace_reconciled", {
+		reason,
+		externalChange: true,
+		fingerprint,
+		mutationEpoch: invalidation.mutationEpoch,
+		invalidatedEvidenceIds: invalidation.invalidatedEvidenceIds,
+		staleClaimIds: invalidation.staleClaimIds,
+		invalidatedFactIds: invalidation.invalidatedFactIds,
+	});
+	await options.repository.save(options.state);
+	return true;
+}
+
 function defaultReport(state: RunState, output: string): StateReport {
 	return {
 		status: "continue",
@@ -97,6 +129,8 @@ function roundLimits(state: RunState): { maxTurns: number; maxOutputTokens: numb
 function errorMessage(error: unknown): string {
 	return error instanceof Error ? error.message : String(error);
 }
+
+class RunBudgetExceededError extends Error {}
 
 function retryableModelError(error: unknown): boolean {
 	const message = errorMessage(error).toLowerCase();
@@ -146,14 +180,45 @@ async function executeTool(
 		await appendEvent(options, "tool_completed", { callId: call.id, tool: call.name, success: false, error: text });
 		return { text, isError: true };
 	}
+	if (options.state.usage.toolCalls >= options.state.budget.maxToolCalls) {
+		const text = "Run-level tool-call budget was exhausted.";
+		await appendEvent(options, "tool_completed", {
+			callId: call.id,
+			tool: call.name,
+			success: false,
+			error: text,
+			budgetExhausted: true,
+		});
+		return {
+			text: `Error: ${text}`,
+			isError: true,
+			report: {
+				status: "blocked",
+				summary: text,
+				requirementIds: [],
+				evidenceIds: [],
+				nextFrontier: options.state.frontier,
+				unknowns: [],
+				conflicts: [],
+				resolvedUnknowns: [],
+				resolvedConflictIds: [],
+			},
+		};
+	}
 	options.state.usage.toolCalls += 1;
+	const mutationEpochBefore = options.state.mutationEpoch;
 	const outcome = await tool.execute(call, {
 		state: options.state,
 		repository: options.repository,
 		signal,
 		permissionMode: options.state.permissionMode,
+		allowNetwork: options.state.allowNetwork,
 		...(options.observer?.authorize ? { authorize: options.observer.authorize } : {}),
 	});
+	if (options.state.mutationEpoch !== mutationEpochBefore) {
+		options.state.workspaceFingerprint = await currentWorkspaceFingerprint(options.state.workspace);
+		options.state.workspaceFingerprintAt = Date.now();
+	}
 	for (const evidence of outcome.evidence) {
 		await appendEvent(options, "evidence_recorded", {
 			evidenceId: evidence.id,
@@ -195,10 +260,15 @@ export async function runHarness(options: HarnessRunOptions): Promise<RunState> 
 		for (const requirement of options.state.requirements) {
 			if (requirement.status === "pending" || requirement.status === "blocked") requirement.status = "active";
 		}
+		await reconcileWorkspace(options, "run start or resume");
 		signal.throwIfAborted();
 		await options.modelPort.assertAvailable(options.state.model, signal);
+		if (options.state.semanticAuditMode !== "off" && options.state.auditModel) {
+			await options.modelPort.assertAvailable(options.state.auditModel, signal);
+		}
 		await options.repository.save(options.state);
 		while (options.state.status === "running") {
+			await reconcileWorkspace(options, `round ${options.state.round + 1} start`);
 			const phase = budgetPhase(options.state);
 			if (phase === "exhausted") {
 				return await blockRun(options, "Run-level token, tool, active-time, or round budget was exhausted.");
@@ -220,19 +290,19 @@ export async function runHarness(options: HarnessRunOptions): Promise<RunState> 
 				maxTurns: limits.maxTurns,
 				maxOutputTokens: limits.maxOutputTokens,
 			});
-				const started = performance.now();
-				const roundSignal = AbortSignal.any([signal, AbortSignal.timeout(options.state.budget.maxRoundTimeMs)]);
-				const incrementallyRecordedUsage: BudgetUsage = {
-					inputTokens: 0,
-					outputTokens: 0,
-					cacheReadTokens: 0,
-					cacheWriteTokens: 0,
-					reasoningTokens: 0,
-					costUsd: 0,
-					toolCalls: 0,
-					wallTimeMs: 0,
-				};
-				let result: ModelRoundResult;
+			const started = performance.now();
+			const roundSignal = AbortSignal.any([signal, AbortSignal.timeout(options.state.budget.maxRoundTimeMs)]);
+			const incrementallyRecordedUsage: BudgetUsage = {
+				inputTokens: 0,
+				outputTokens: 0,
+				cacheReadTokens: 0,
+				cacheWriteTokens: 0,
+				reasoningTokens: 0,
+				costUsd: 0,
+				toolCalls: 0,
+				wallTimeMs: 0,
+			};
+			let result: ModelRoundResult;
 			try {
 				result = await options.modelPort.runRound({
 					model: options.state.model,
@@ -246,15 +316,20 @@ export async function runHarness(options: HarnessRunOptions): Promise<RunState> 
 					})),
 					maxTurns: limits.maxTurns,
 					maxOutputTokens: limits.maxOutputTokens,
-						signal: roundSignal,
-						...(options.observer?.onText ? { onText: options.observer.onText } : {}),
-						onUsage: async usage => {
-							addUsage(incrementallyRecordedUsage, usage);
-							addUsage(options.state.usage, usage);
-							await appendEvent(options, "model_usage_recorded", { round: options.state.round, usage });
-							await options.repository.save(options.state);
-						},
-						executeTool: async call => {
+					signal: roundSignal,
+					...(options.observer?.onText ? { onText: options.observer.onText } : {}),
+					onUsage: async usage => {
+						addUsage(incrementallyRecordedUsage, usage);
+						addUsage(options.state.usage, usage);
+						await appendEvent(options, "model_usage_recorded", { round: options.state.round, usage });
+						await options.repository.save(options.state);
+						if (budgetPhase(options.state) === "exhausted") {
+							throw new RunBudgetExceededError(
+								"token, active-time, cost, round, or tool budget reached its hard limit",
+							);
+						}
+					},
+					executeTool: async call => {
 						const signature = `${call.name}:${JSON.stringify(call.arguments)}`;
 						const count = (callCounts.get(signature) ?? 0) + 1;
 						callCounts.set(signature, count);
@@ -289,6 +364,9 @@ export async function runHarness(options: HarnessRunOptions): Promise<RunState> 
 			} catch (error) {
 				options.state.usage.wallTimeMs += performance.now() - started;
 				if (signal.aborted) throw error;
+				if (error instanceof RunBudgetExceededError || budgetPhase(options.state) === "exhausted") {
+					return await blockRun(options, `Run-level budget exhausted during model round: ${errorMessage(error)}`);
+				}
 				options.state.health.consecutiveModelErrors += 1;
 				options.state.health.totalModelErrors += 1;
 				options.state.health.lastModelError = errorMessage(error).slice(0, 2_000);
@@ -318,7 +396,7 @@ export async function runHarness(options: HarnessRunOptions): Promise<RunState> 
 				throw error;
 			}
 			result.usage.wallTimeMs += performance.now() - started;
-				addUsage(options.state.usage, usageDifference(result.usage, incrementallyRecordedUsage));
+			addUsage(options.state.usage, usageDifference(result.usage, incrementallyRecordedUsage));
 			options.state.health.consecutiveModelErrors = 0;
 			await appendEvent(options, "model_completed", {
 				round: options.state.round,
@@ -333,8 +411,10 @@ export async function runHarness(options: HarnessRunOptions): Promise<RunState> 
 				summary: report.summary,
 				requirementIds: report.requirementIds,
 				evidenceIds: report.evidenceIds,
-					nextFrontier: report.nextFrontier,
-				});
+				nextFrontier: report.nextFrontier,
+				claims: report.claims ?? [],
+				facts: report.facts ?? [],
+			});
 			options.state.audit = assessAuditRisk(options.state, report);
 			await appendEvent(options, "audit_routed", {
 				route: options.state.audit.route,
@@ -344,23 +424,30 @@ export async function runHarness(options: HarnessRunOptions): Promise<RunState> 
 				advisory: options.state.audit.advisory,
 			});
 			if (
-				options.state.semanticAuditMode === "shadow" &&
+				options.state.semanticAuditMode !== "off" &&
 				report.status === "complete" &&
 				options.state.audit.route === "semantic_audit"
 			) {
-				const auditSignal = AbortSignal.any([
-					signal,
-					AbortSignal.timeout(Math.min(options.state.budget.maxRoundTimeMs, 10 * 60_000)),
-				]);
-				await runShadowSemanticAudit({
-					state: options.state,
-					repository: options.repository,
-					modelPort: options.modelPort,
-					signal: auditSignal,
-				});
+				if (budgetPhase(options.state) === "exhausted") {
+					if (options.state.semanticAuditMode === "gate") {
+						return await blockRun(options, "Run-level budget was exhausted before mandatory semantic review.");
+					}
+				} else {
+					const auditSignal = AbortSignal.any([
+						signal,
+						AbortSignal.timeout(Math.min(options.state.budget.maxRoundTimeMs, 10 * 60_000)),
+					]);
+					await runShadowSemanticAudit({
+						state: options.state,
+						repository: options.repository,
+						modelPort: options.modelPort,
+						signal: auditSignal,
+					});
+				}
 			}
 
 			if (report.status === "complete") {
+				await reconcileWorkspace(options, `round ${options.state.round} completion`);
 				const decision = decideCompletion(options.state, report);
 				commitCompletion(options.state, report, decision);
 				if (!decision.complete) {
@@ -368,7 +455,7 @@ export async function runHarness(options: HarnessRunOptions): Promise<RunState> 
 				}
 			} else if (report.status === "blocked") {
 				options.state.recoveryGuidance = `Executor reported a blocker: ${report.summary}`;
-			} else {
+			} else if (result.report) {
 				delete options.state.recoveryGuidance;
 			}
 

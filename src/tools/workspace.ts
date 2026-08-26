@@ -3,6 +3,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import type { EvidenceKind } from "../core/types";
 import type { ShellRisk } from "./types";
+import { longtimeHome } from "../paths";
 
 const MAX_OUTPUT_CHARACTERS = 60_000;
 const SNAPSHOT_EXCLUDED_DIRECTORIES = new Set([
@@ -19,22 +20,62 @@ const SNAPSHOT_EXCLUDED_DIRECTORIES = new Set([
 ]);
 const SNAPSHOT_EXCLUDED_FILE_SUFFIXES = [".gcda", ".gcno", ".o", ".obj", ".pyc"];
 const HIGH_RISK_COMMANDS = [
+	// Shell syntax that can hide a second command or write without going through
+	// the snapshot-checked file tools. This is intentionally conservative: an
+	// authorization prompt is cheaper than recovering an overwritten worktree.
+	/`|\$\(|[<>]\(|>(?!&[012](?:\s|$))/,
+	/(?:^|[\s;&|])tee\b/i,
+	// Explicit workspace destruction, overwrite, permission changes, or
+	// in-place editing. Plain `rm file` is just as irreversible for an untracked
+	// file as `rm -rf`, so flags are deliberately not required here.
+	/\b(?:rm|rmdir|unlink|shred|truncate)\b/i,
+	/\b(?:mv|cp|patch)\b/i,
+	/\b(?:chmod|chown|chgrp|setfacl)\b/i,
+	/\bfind\b[^\n]*(?:-delete\b|-exec(?:dir)?\b)/i,
+	/\bsed\b[^\n]*(?:\s-[A-Za-z]*i[A-Za-z]*\b|\s--in-place\b)/i,
+	/\bperl\b[^\n]*\s-[A-Za-z]*i[A-Za-z]*\b/i,
+	/\b(?:prettier\b[^\n]*--write\b|eslint\b[^\n]*--fix\b|gofmt\b[^\n]*-w\b)/i,
+	/\b(?:tar\b[^\n]*\s-[A-Za-z]*x[A-Za-z]*|unzip\b)/i,
 	/\b(?:sudo|su)\b/i,
-	/\brm\s+(?:-[^\s]*[rf][^\s]*\s+)+/i,
-	/\bgit\s+(?:push|reset\s+--hard|clean\s+-[^\s]*f)/i,
-	/\b(?:npm|pnpm|yarn|bun)\s+publish\b/i,
-	/\b(?:docker|podman)\s+push\b/i,
-	/\bkubectl\s+(?:apply|delete|replace|patch|create)\b/i,
-	/\bterraform\s+(?:apply|destroy)\b/i,
+	// Git commands that publish, rewrite history, discard changes, apply a
+	// patch, move worktrees, or change remote configuration.
+	/\bgit\s+(?:-[^\s]+\s+)*(?:push|commit|checkout|switch|restore|reset|clean|merge|rebase|cherry-pick|revert|apply|am)\b/i,
+	/\bgit\s+(?:-[^\s]+\s+)*stash\s+(?:apply|pop|drop|clear|branch)\b/i,
+	/\bgit\s+(?:-[^\s]+\s+)*(?:branch|tag)\b[^\n]*(?:-[dD]\b|--delete\b)/i,
+	/\bgit\s+(?:-[^\s]+\s+)*worktree\s+(?:remove|move|prune)\b/i,
+	/\bgit\s+(?:-[^\s]+\s+)*remote\s+(?:add|remove|rename|set-url)\b/i,
+	/\bgit\s+(?:-[^\s]+\s+)*config\b/i,
+	// Dependency installation can change lockfiles and execute lifecycle code.
+	/\b(?:npm|pnpm|yarn|bun)\s+(?:install|add|remove|uninstall|update|upgrade|link|unlink|publish|exec|x)\b/i,
+	/\b(?:npx|pnpx|bunx|uvx)\b/i,
+	/\b(?:pip3?|uv)\s+(?:install|uninstall|sync)\b/i,
+	/\b(?:cargo|go)\s+install\b/i,
+	/\b(?:docker|podman|kubectl|terraform)\b/i,
 	/\bcurl\b[^\n]*(?:-X|--request)\s*(?:POST|PUT|PATCH|DELETE)\b/i,
 	/\b(?:dd|mkfs|shutdown|reboot)\b/i,
-	/\bchmod\s+(?:-[^\s]+\s+)?777\b/i,
+	/\b(?:curl|wget|nc|ncat|netcat|ssh|scp|sftp|rsync)\b/i,
+	/\b(?:gh|aws|gcloud|az|helm|pulumi|vercel|netlify|flyctl|heroku|stripe|psql|mysql|mongosh|redis-cli)\b/i,
+	/\b(?:bash|sh|zsh|fish|cmd|powershell|pwsh)\b[^\n]*(?:\s-c\b|\s-command\b)/i,
+	/\b(?:python3?|node|ruby|perl|php|deno|bun)\b[^\n]*(?:\s-c\b|\s-e\b|\s-eval\b)/i,
+	// Obvious host-boundary reads. The local sandbox masks common credential
+	// stores, but classification must still request authority when a command
+	// names a home path, parent traversal, or sensitive store explicitly.
+	/(?:^|[\s"'=])(?:~(?:\/|$)|\.\.(?:\/|\\)|\$HOME\b|\$\{HOME\}|\/(?:Users|home|root|etc|private|Volumes)(?:\/|\b))/i,
+	/(?:^|[\/\\])\.(?:ssh|aws|gnupg|codex|claude|longtime|continuum)(?:[\/\\]|\b)/i,
+	/(?:^|[\/\\])\.(?:npmrc|netrc)(?:\b|$)|\/etc\/(?:shadow|sudoers)\b/i,
 ];
 const LOW_RISK_COMMANDS = [
-	/^\s*(?:git\s+(?:status|diff|log|show)|pwd|ls|find|rg|grep|sed|head|tail|wc|cat)\b/i,
-	/\b(?:test|check|lint|typecheck|build)\b/i,
+	/^\s*git\s+(?:status|diff|log|show|grep|rev-parse|ls-files|ls-tree|describe)\b/i,
+	/^\s*(?:pwd|ls|find|rg|grep|sed|head|tail|wc|cat|file|stat|du|tree|sort|uniq|cut|tr|basename|dirname|realpath|which)\b/i,
+	/^\s*(?:echo|printf)\b/i,
 	/^\s*(?:bun|npm|pnpm|yarn)\s+(?:test|run\s+(?:test|check|lint|typecheck|build))\b/i,
 	/^\s*(?:cargo\s+(?:test|check|clippy|build)|go\s+test|pytest|python\s+-m\s+pytest)\b/i,
+	/^\s*(?:tsc\s+--noEmit|ruff\s+check|biome\s+check|mypy\b|prettier\b[^\n]*--check\b|eslint\b(?![^\n]*--fix\b)|go\s+vet\b|cargo\s+fmt\b[^\n]*--check\b)/i,
+	/^\s*(?:make|gmake)\b[^\n]*(?:\s|^)(?:test|check|lint|typecheck|build)(?:\s|$)/i,
+];
+const MEDIUM_RISK_COMMANDS = [
+	/^\s*(?:mkdir|touch)\b/i,
+	/^\s*git\s+(?:add|init)\b/i,
 ];
 
 function within(root: string, candidate: string): boolean {
@@ -46,10 +87,34 @@ export function hashText(text: string): string {
 	return new Bun.CryptoHasher("sha256").update(text).digest("hex");
 }
 
+export function fingerprintSnapshot(snapshot: ReadonlyMap<string, string>): string {
+	const manifest = [...snapshot.entries()]
+		.sort(([left], [right]) => left.localeCompare(right))
+		.map(([file, descriptor]) => `${file}\u0000${descriptor}`)
+		.join("\n");
+	return hashText(manifest);
+}
+
 export function classifyShellRisk(command: string): ShellRisk {
+	if (!command.trim()) return "high";
+	// Only a conjunction of independently classified commands inherits their
+	// maximum risk. Other shell control operators can mask failure, detach work,
+	// or create data flows that static token matching cannot reason about.
+	if (/\|\||[;\n]|(?<!\|)\|(?!\|)|(?<!&)&(?!&)/.test(command)) return "high";
+	const conjunctions = command.split(/\s*&&\s*/);
+	if (conjunctions.length > 1) {
+		const risks = conjunctions.map(classifyShellRisk);
+		if (risks.includes("high")) return "high";
+		if (risks.includes("medium")) return "medium";
+		return "low";
+	}
 	if (HIGH_RISK_COMMANDS.some(pattern => pattern.test(command))) return "high";
 	if (LOW_RISK_COMMANDS.some(pattern => pattern.test(command))) return "low";
-	return "medium";
+	if (MEDIUM_RISK_COMMANDS.some(pattern => pattern.test(command))) return "medium";
+	// Unknown executables and non-standard scripts are code execution, not a
+	// routine inspection. Requiring authority prevents a benign-looking prefix
+	// or project-controlled wrapper from bypassing the policy.
+	return "high";
 }
 
 export function shellEvidenceKind(command: string): EvidenceKind {
@@ -110,24 +175,19 @@ export class Workspace {
 	async resolveWritable(input: string): Promise<string> {
 		const lexical = path.resolve(this.root, input);
 		if (!within(this.root, lexical)) throw new Error(`Path is outside the workspace: ${input}`);
-		let ancestor = path.dirname(lexical);
-		while (true) {
+		const relative = path.relative(this.root, lexical);
+		let current = this.root;
+		for (const segment of relative.split(path.sep).filter(Boolean)) {
+			current = path.join(current, segment);
 			try {
-				const canonical = await fs.realpath(ancestor);
-				if (!within(this.root, canonical)) throw new Error(`Parent resolves outside the workspace: ${input}`);
-				break;
+				const stat = await fs.lstat(current);
+				if (stat.isSymbolicLink()) {
+					throw new Error(`Writable path contains a symbolic link: ${input}`);
+				}
 			} catch (error) {
-				if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
-				const parent = path.dirname(ancestor);
-				if (parent === ancestor) throw error;
-				ancestor = parent;
+				if ((error as NodeJS.ErrnoException).code === "ENOENT") break;
+				throw error;
 			}
-		}
-		try {
-			const existing = await fs.realpath(lexical);
-			if (!within(this.root, existing)) throw new Error(`Path resolves outside the workspace: ${input}`);
-		} catch (error) {
-			if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
 		}
 		return lexical;
 	}
@@ -147,11 +207,11 @@ export class Workspace {
 				throw error;
 			}
 			entries.sort((left, right) => left.name.localeCompare(right.name));
-				for (const entry of entries) {
-					if (entry.isDirectory() && SNAPSHOT_EXCLUDED_DIRECTORIES.has(entry.name)) continue;
-					if (!entry.isDirectory() && SNAPSHOT_EXCLUDED_FILE_SUFFIXES.some(suffix => entry.name.endsWith(suffix))) {
-						continue;
-					}
+			for (const entry of entries) {
+				if (entry.isDirectory() && SNAPSHOT_EXCLUDED_DIRECTORIES.has(entry.name)) continue;
+				if (!entry.isDirectory() && SNAPSHOT_EXCLUDED_FILE_SUFFIXES.some(suffix => entry.name.endsWith(suffix))) {
+					continue;
+				}
 				const absolute = path.join(directory, entry.name);
 				const relative = this.relative(absolute);
 				try {
@@ -177,6 +237,74 @@ export class Workspace {
 		const after = await this.snapshot();
 		const paths = new Set([...before.keys(), ...after.keys()]);
 		return [...paths].filter(item => before.get(item) !== after.get(item)).sort();
+	}
+
+	async fingerprint(): Promise<string> {
+		const git = Bun.which("git");
+		if (git) {
+			try {
+				await fs.access(path.join(this.root, ".git"));
+				const run = (args: string[]): ReturnType<typeof Bun.spawnSync> => Bun.spawnSync([git, ...args], {
+					cwd: this.root,
+					stdout: "pipe",
+					stderr: "ignore",
+				});
+				const head = run(["rev-parse", "HEAD"]);
+				const index = run(["write-tree"]);
+				const status = run(["status", "--porcelain=v1", "-z", "--untracked-files=all"]);
+				const changed = run(["ls-files", "-m", "-o", "--exclude-standard", "-z"]);
+				if ([head, index, status, changed].every(item => item.exitCode === 0)) {
+					const hasher = new Bun.CryptoHasher("sha256");
+					hasher.update(head.stdout ?? Buffer.alloc(0));
+					hasher.update(index.stdout ?? Buffer.alloc(0));
+					hasher.update(status.stdout ?? Buffer.alloc(0));
+					for (const relative of (changed.stdout ?? Buffer.alloc(0)).toString().split("\0").filter(Boolean).sort()) {
+						const file = path.join(this.root, relative);
+						try {
+							hasher.update(relative);
+							const stat = await fs.lstat(file);
+							if (stat.isSymbolicLink()) {
+								hasher.update(`symlink:${await fs.readlink(file)}`);
+							} else if (stat.isFile()) {
+								const reader = Bun.file(file).stream().getReader();
+								while (true) {
+									const { done, value } = await reader.read();
+									if (done) break;
+									hasher.update(value);
+								}
+							} else {
+								hasher.update(`other:${stat.mode}:${stat.size}`);
+							}
+						} catch (error) {
+							if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+						}
+					}
+					return hasher.digest("hex");
+				}
+			} catch {}
+		}
+		const snapshot = await this.snapshot();
+		const hasher = new Bun.CryptoHasher("sha256");
+		for (const [relative, descriptor] of [...snapshot.entries()].sort(([left], [right]) => left.localeCompare(right))) {
+			hasher.update(relative);
+			hasher.update("\0");
+			if (!descriptor.startsWith("file:")) {
+				hasher.update(descriptor);
+				continue;
+			}
+			try {
+				const reader = Bun.file(path.join(this.root, relative)).stream().getReader();
+				while (true) {
+					const { done, value } = await reader.read();
+					if (done) break;
+					hasher.update(value);
+				}
+			} catch (error) {
+				if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+				hasher.update("missing-during-fingerprint");
+			}
+		}
+		return hasher.digest("hex");
 	}
 }
 
@@ -356,7 +484,7 @@ export function shellCommandInvocation(
 	return [which("bash") ?? "/bin/sh", "-lc", command];
 }
 
-async function sandboxedInvocation(command: string, cwd: string): Promise<ShellInvocation> {
+async function sandboxedInvocation(command: string, cwd: string, allowNetwork: boolean): Promise<ShellInvocation> {
 	const base = shellCommandInvocation(command);
 	if (inheritedSandboxActive()) {
 		return { argv: base, sandboxed: true };
@@ -365,18 +493,24 @@ async function sandboxedInvocation(command: string, cwd: string): Promise<ShellI
 		const home = os.homedir();
 		const temporary = await fs.realpath(os.tmpdir());
 		const sensitiveDirectories = [
-			path.join(home, ".ssh"),
-			path.join(home, ".aws"),
-			path.join(home, ".gnupg"),
-			path.join(home, ".config", "gcloud"),
-			path.join(home, ".codex"),
-			path.join(home, ".claude"),
+			...new Set([
+				path.join(home, ".ssh"),
+				path.join(home, ".aws"),
+				path.join(home, ".gnupg"),
+				path.join(home, ".config", "gcloud"),
+				path.join(home, ".codex"),
+				path.join(home, ".claude"),
+				path.join(home, ".longtime"),
+				path.join(home, ".continuum"),
+				longtimeHome(),
+			]),
 		];
 		const sensitiveFiles = [path.join(home, ".npmrc"), path.join(home, ".netrc")];
 		const profile = [
 			"(version 1)",
 			"(allow default)",
 			"(deny file-write*)",
+			...(!allowNetwork ? ["(deny network*)"] : []),
 			`(allow file-write* (subpath ${JSON.stringify(cwd)}) (subpath ${JSON.stringify(temporary)}) (literal \"/dev/null\"))`,
 			...sensitiveDirectories.map(item => `(deny file-read* (subpath ${JSON.stringify(item)}))`),
 			...sensitiveFiles.map(item => `(deny file-read* (literal ${JSON.stringify(item)}))`),
@@ -387,22 +521,32 @@ async function sandboxedInvocation(command: string, cwd: string): Promise<ShellI
 		const home = os.homedir();
 		const temporary = await fs.realpath(os.tmpdir());
 		const masks: string[] = [];
-		for (const candidate of [
+		for (const candidate of new Set([
 			path.join(home, ".ssh"),
 			path.join(home, ".aws"),
 			path.join(home, ".gnupg"),
 			path.join(home, ".config", "gcloud"),
 			path.join(home, ".codex"),
 			path.join(home, ".claude"),
-		]) {
+			path.join(home, ".longtime"),
+			path.join(home, ".continuum"),
+			longtimeHome(),
+		])) {
 			try {
 				if ((await fs.lstat(candidate)).isDirectory()) masks.push("--tmpfs", candidate);
+			} catch {}
+		}
+		const fileMasks: string[] = [];
+		for (const candidate of [path.join(home, ".npmrc"), path.join(home, ".netrc")]) {
+			try {
+				if ((await fs.lstat(candidate)).isFile()) fileMasks.push("--ro-bind", "/dev/null", candidate);
 			} catch {}
 		}
 		return {
 			argv: [
 				"bwrap",
 				"--die-with-parent",
+				...(!allowNetwork ? ["--unshare-net"] : []),
 				"--ro-bind",
 				"/",
 				"/",
@@ -418,6 +562,7 @@ async function sandboxedInvocation(command: string, cwd: string): Promise<ShellI
 				"--proc",
 				"/proc",
 				...masks,
+				...fileMasks,
 				"--chdir",
 				cwd,
 				...base,
@@ -434,11 +579,12 @@ export async function runShell(options: {
 	timeoutSeconds: number;
 	signal: AbortSignal;
 	sandbox: boolean;
+	allowNetwork?: boolean;
 }): Promise<{ output: string; exitCode: number; sandboxed: boolean }> {
 	const timeout = AbortSignal.timeout(Math.round(options.timeoutSeconds * 1000));
 	const signal = AbortSignal.any([options.signal, timeout]);
 	const invocation = options.sandbox
-		? await sandboxedInvocation(options.command, options.cwd)
+		? await sandboxedInvocation(options.command, options.cwd, options.allowNetwork ?? false)
 		: { argv: shellCommandInvocation(options.command), sandboxed: inheritedSandboxActive() };
 	const toolCacheRoot = path.join(os.tmpdir(), "longtime-tool-cache", hashText(options.cwd).slice(0, 16));
 	await fs.mkdir(toolCacheRoot, { recursive: true });

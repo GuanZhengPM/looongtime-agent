@@ -10,6 +10,7 @@ export function budgetPhase(state: RunState): BudgetPhase {
 		tokens >= state.budget.hardTokenLimit ||
 		state.usage.toolCalls >= state.budget.maxToolCalls ||
 		state.usage.wallTimeMs >= state.budget.maxWallTimeMs ||
+		(state.budget.maxCostUsd !== undefined && state.usage.costUsd >= state.budget.maxCostUsd) ||
 		state.round >= state.budget.maxRounds
 	) {
 		return "exhausted";

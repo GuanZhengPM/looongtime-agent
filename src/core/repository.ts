@@ -5,12 +5,19 @@ import type { RunEvent, RunState } from "./types";
 import { compactRunState, normalizeRunState } from "./state";
 
 const LEASE_HEARTBEAT_MS = 15_000;
+const LEASE_INITIALIZATION_GRACE_MS = 30_000;
 
 interface LeaseRecord {
 	token: string;
 	pid: number;
 	acquiredAt: number;
 	heartbeatAt: number;
+}
+
+function assertSafeRunId(runId: string): void {
+	if (!/^[A-Za-z0-9][A-Za-z0-9._-]{0,199}$/.test(runId) || runId === "." || runId === "..") {
+		throw new Error("Run id must be a safe single path segment.");
+	}
 }
 
 export interface RunLease {
@@ -25,25 +32,49 @@ async function atomicWriteJson(file: string, value: unknown): Promise<void> {
 	await fs.mkdir(path.dirname(file), { recursive: true, mode: 0o700 });
 	const temporary = `${file}.${crypto.randomUUID()}.tmp`;
 	const handle = await fs.open(temporary, "wx", 0o600);
+	let renamed = false;
 	try {
-		await handle.writeFile(`${JSON.stringify(value, null, 2)}\n`, "utf8");
-		await handle.sync();
+		try {
+			await handle.writeFile(`${JSON.stringify(value, null, 2)}\n`, "utf8");
+			await handle.sync();
+		} finally {
+			await handle.close();
+		}
+		await fs.rename(temporary, file);
+		renamed = true;
+		await fs.chmod(file, 0o600);
+		await syncDirectory(path.dirname(file));
 	} finally {
-		await handle.close();
+		if (!renamed) await fs.unlink(temporary).catch(() => {});
 	}
-	await fs.rename(temporary, file);
-	await fs.chmod(file, 0o600);
+}
+
+async function syncDirectory(directory: string): Promise<void> {
+	let handle: fs.FileHandle | undefined;
+	try {
+		handle = await fs.open(directory, "r");
+		await handle.sync();
+	} catch (error) {
+		if (!new Set(["EINVAL", "ENOTSUP", "EPERM", "EISDIR"]).has((error as NodeJS.ErrnoException).code ?? "")) {
+			throw error;
+		}
+	} finally {
+		await handle?.close();
+	}
 }
 
 export class RunRepository {
 	readonly runDirectory: string;
 	readonly statePath: string;
+	readonly stateBackupPath: string;
 	readonly eventsPath: string;
 	readonly leasePath: string;
 
 	constructor(workspace: string, runId: string) {
+		assertSafeRunId(runId);
 		this.runDirectory = path.join(longtimeHome(), "runs", workspaceKey(workspace), runId);
 		this.statePath = path.join(this.runDirectory, "state.json");
+		this.stateBackupPath = path.join(this.runDirectory, "state.prev.json");
 		this.eventsPath = path.join(this.runDirectory, "events.jsonl");
 		this.leasePath = path.join(this.runDirectory, "run.lock");
 	}
@@ -51,11 +82,32 @@ export class RunRepository {
 	async save(state: RunState): Promise<void> {
 		compactRunState(state);
 		state.updatedAt = Date.now();
+		try {
+			const current = (await Bun.file(this.statePath).json()) as { version?: unknown };
+			if (current.version === 1) {
+				await fs.copyFile(this.statePath, this.stateBackupPath);
+				await fs.chmod(this.stateBackupPath, 0o600);
+				await syncDirectory(this.runDirectory);
+			}
+		} catch (error) {
+			if ((error as NodeJS.ErrnoException).code !== "ENOENT" && !(error instanceof SyntaxError)) throw error;
+		}
 		await atomicWriteJson(this.statePath, state);
 	}
 
 	async load(): Promise<RunState> {
-		const parsed = (await Bun.file(this.statePath).json()) as RunState;
+		let parsed: RunState;
+		try {
+			parsed = (await Bun.file(this.statePath).json()) as RunState;
+		} catch (primaryError) {
+			try {
+				parsed = (await Bun.file(this.stateBackupPath).json()) as RunState;
+			} catch {
+				throw new Error("The current run snapshot is unreadable and no valid previous snapshot is available.", {
+					cause: primaryError,
+				});
+			}
+		}
 		if (parsed.version !== 1) throw new Error(`Unsupported run state version: ${String(parsed.version)}`);
 		parsed.eventSequence = Math.max(parsed.eventSequence, await this.#lastEventSequence());
 		return normalizeRunState(parsed);
@@ -106,7 +158,7 @@ export class RunRepository {
 
 	async acquireLease(): Promise<RunLease> {
 		await fs.mkdir(this.runDirectory, { recursive: true });
-		for (let attempt = 0; attempt < 2; attempt += 1) {
+		for (let attempt = 0; attempt < 650; attempt += 1) {
 			try {
 				const handle = await fs.open(this.leasePath, "wx+", 0o600);
 				const token = crypto.randomUUID();
@@ -147,29 +199,52 @@ export class RunRepository {
 				try {
 					owner = JSON.parse(await Bun.file(this.leasePath).text()) as LeaseRecord;
 				} catch {}
-				if (owner && processIsAlive(owner.pid)) {
-					throw new Error(`Run is already active in process ${owner.pid}.`);
+				if (owner) {
+					if (processIsAlive(owner.pid)) throw new Error(`Run is already active in process ${owner.pid}.`);
+					await fs.unlink(this.leasePath).catch(unlinkError => {
+						if ((unlinkError as NodeJS.ErrnoException).code !== "ENOENT") throw unlinkError;
+					});
+					continue;
 				}
-				await fs.unlink(this.leasePath).catch(unlinkError => {
-					if ((unlinkError as NodeJS.ErrnoException).code !== "ENOENT") throw unlinkError;
-				});
+				let ageMs = 0;
+				try {
+					ageMs = Date.now() - (await fs.stat(this.leasePath)).mtimeMs;
+				} catch (statError) {
+					if ((statError as NodeJS.ErrnoException).code === "ENOENT") continue;
+					throw statError;
+				}
+				if (ageMs >= LEASE_INITIALIZATION_GRACE_MS) {
+					await fs.unlink(this.leasePath).catch(unlinkError => {
+						if ((unlinkError as NodeJS.ErrnoException).code !== "ENOENT") throw unlinkError;
+					});
+					continue;
+				}
+				await new Promise(resolve => setTimeout(resolve, 50));
 			}
 		}
 		throw new Error("Unable to acquire the run lease.");
 	}
 
 	async append(state: RunState, type: RunEvent["type"], payload: Record<string, unknown>): Promise<RunEvent> {
-		state.eventSequence += 1;
+		const sequence = state.eventSequence + 1;
 		const event: RunEvent = {
 			id: crypto.randomUUID(),
 			runId: state.id,
-			sequence: state.eventSequence,
+			sequence,
 			at: Date.now(),
 			type,
 			payload,
 		};
 		await fs.mkdir(this.runDirectory, { recursive: true, mode: 0o700 });
-		await fs.appendFile(this.eventsPath, `${JSON.stringify(event)}\n`, { encoding: "utf8", mode: 0o600 });
+		const handle = await fs.open(this.eventsPath, "a", 0o600);
+		try {
+			await handle.chmod(0o600);
+			await handle.writeFile(`${JSON.stringify(event)}\n`, "utf8");
+			await handle.sync();
+		} finally {
+			await handle.close();
+		}
+		state.eventSequence = sequence;
 		return event;
 	}
 
@@ -197,6 +272,7 @@ export class RunRepository {
 	}
 
 	static async find(runId: string): Promise<RunRepository> {
+		assertSafeRunId(runId);
 		const root = path.join(longtimeHome(), "runs");
 		try {
 			await fs.access(root);
@@ -204,10 +280,25 @@ export class RunRepository {
 			if ((error as NodeJS.ErrnoException).code === "ENOENT") throw new Error(`Run '${runId}' was not found.`);
 			throw error;
 		}
-		const matches = [...new Bun.Glob(`*/${runId}/state.json`).scanSync({ cwd: root, absolute: true })];
-		if (matches.length === 0) throw new Error(`Run '${runId}' was not found.`);
-		if (matches.length > 1) throw new Error(`Run id '${runId}' is ambiguous.`);
-		const state = (await Bun.file(matches[0] ?? "").json()) as RunState;
+		const snapshotMatches = [
+			...new Bun.Glob(`*/${runId}/state.json`).scanSync({ cwd: root, absolute: true }),
+			...new Bun.Glob(`*/${runId}/state.prev.json`).scanSync({ cwd: root, absolute: true }),
+		];
+		const runDirectories = [...new Set(snapshotMatches.map(file => path.dirname(file)))];
+		if (runDirectories.length === 0) throw new Error(`Run '${runId}' was not found.`);
+		if (runDirectories.length > 1) throw new Error(`Run id '${runId}' is ambiguous.`);
+		const runDirectory = runDirectories[0] as string;
+		let state: RunState;
+		try {
+			state = (await Bun.file(path.join(runDirectory, "state.json")).json()) as RunState;
+		} catch (primaryError) {
+			try {
+				state = (await Bun.file(path.join(runDirectory, "state.prev.json")).json()) as RunState;
+			} catch {
+				throw new Error(`Run '${runId}' has no readable state snapshot.`, { cause: primaryError });
+			}
+		}
+		if (state.id !== runId) throw new Error(`Run snapshot id '${state.id}' does not match '${runId}'.`);
 		return new RunRepository(state.workspace, state.id);
 	}
 }
