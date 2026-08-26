@@ -7,12 +7,14 @@ export type ReportStatus = "continue" | "complete" | "blocked";
 export type ClaimStatus = "proposed" | "supported" | "stale" | "rejected";
 export type ClaimRisk = "low" | "medium" | "high" | "critical";
 export type AuditRoute = "continue" | "verify" | "semantic_audit" | "human_review";
-export type SemanticAuditMode = "off" | "shadow";
+export type SemanticAuditMode = "off" | "shadow" | "gate";
 export type SemanticAuditVerdict = "pass" | "reject" | "contract_drift" | "inconclusive";
+export type EvidenceOutcome = "observed" | "passed" | "failed";
 
 export interface Requirement {
 	id: string;
 	description: string;
+	origin?: "objective" | "requirement" | "constraint";
 	required: boolean;
 	status: RequirementStatus;
 	evidenceIds: string[];
@@ -23,7 +25,10 @@ export interface GoalContract {
 	objective: string;
 	requirements: Requirement[];
 	constraints: string[];
+	verificationCommands: string[];
+	requiresWorkspaceChange: boolean;
 	createdAt: number;
+	lockedAt: number;
 }
 
 export interface Evidence {
@@ -36,6 +41,9 @@ export interface Evidence {
 	observedAt: number;
 	contentHash?: string;
 	exitCode?: number;
+	outcome?: EvidenceOutcome;
+	verifiesRequirementIds?: string[];
+	commandHash?: string;
 	dependencyPaths?: string[];
 	globalScope?: boolean;
 	invalidatedAt?: number;
@@ -142,6 +150,13 @@ export interface VerifiedFact {
 	statement: string;
 	evidenceIds: string[];
 	verifiedAt: number;
+	invalidatedAt?: number;
+	invalidationReason?: string;
+}
+
+export interface FactSubmission {
+	statement: string;
+	evidenceIds: string[];
 }
 
 export interface Conflict {
@@ -166,6 +181,8 @@ export interface ProgressDelta {
 	resolvedUnknowns: number;
 	resolvedConflicts: number;
 	mutationEpochs: number;
+	diagnosticEvidence: number;
+	verifiedFacts: number;
 	score: number;
 }
 
@@ -181,6 +198,7 @@ export interface BudgetConfig {
 	modelRetryBaseDelayMs: number;
 	modelRetryMaxDelayMs: number;
 	maxRoundTimeMs: number;
+	maxCostUsd?: number;
 }
 
 export interface BudgetUsage {
@@ -214,7 +232,9 @@ export interface RunState {
 	status: RunStatus;
 	contract: GoalContract;
 	model: ModelSelection;
+	auditModel?: ModelSelection;
 	permissionMode: PermissionMode;
+	allowNetwork: boolean;
 	requirements: Requirement[];
 	evidence: Evidence[];
 	artifacts: Artifact[];
@@ -234,6 +254,9 @@ export interface RunState {
 	audit: AuditDecision;
 	semanticAuditMode: SemanticAuditMode;
 	semanticAudits: SemanticAuditRecord[];
+	workspaceFingerprint?: string;
+	workspaceFingerprintAt?: number;
+	baselineWorkspaceFingerprint?: string;
 	startedAt: number;
 	updatedAt: number;
 	completedAt?: number;
@@ -250,6 +273,7 @@ export interface StateReport {
 	resolvedUnknowns: string[];
 	resolvedConflictIds: string[];
 	claims?: ClaimSubmission[];
+	facts?: FactSubmission[];
 }
 
 export interface RunEvent {
@@ -269,6 +293,7 @@ export interface RunEvent {
 		| "model_retry_scheduled"
 		| "tool_started"
 		| "tool_completed"
+		| "workspace_reconciled"
 		| "evidence_recorded"
 		| "state_reported"
 		| "audit_routed"
@@ -291,6 +316,11 @@ export interface StateSnapshot {
 	unknowns: number;
 	openConflicts: number;
 	mutationEpoch: number;
+	diagnosticEvidence: number;
+	verifiedFacts: number;
+	validEvidenceSignatures: string[];
+	diagnosticEvidenceSignatures: string[];
+	artifactSignatures: string[];
 }
 
 export interface CompletionDecision {
@@ -311,6 +341,7 @@ export const DEFAULT_BUDGET: BudgetConfig = {
 	modelRetryBaseDelayMs: 1_000,
 	modelRetryMaxDelayMs: 60_000,
 	maxRoundTimeMs: 30 * 60_000,
+	maxCostUsd: 100,
 };
 
 export function emptyUsage(): BudgetUsage {

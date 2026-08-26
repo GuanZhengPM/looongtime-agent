@@ -1,7 +1,10 @@
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
-import { Type } from "@earendil-works/pi-ai";
+import { Type, validateToolCall, type Tool, type ToolCall } from "@earendil-works/pi-ai";
+import { validateRelativeGlob } from "../path-policy";
+import { compileSearchRegex } from "../regex-policy";
+import { budgetPhase, remainingTokens } from "./budget";
 import type { ModelPort, ModelToolCall, ModelToolResult } from "./model-port";
 import { currentEvidence } from "./proof";
 import type { RunRepository } from "./repository";
@@ -66,10 +69,10 @@ function usageDifference(total: BudgetUsage, recorded: BudgetUsage): BudgetUsage
 		outputTokens: Math.max(0, total.outputTokens - recorded.outputTokens),
 		cacheReadTokens: Math.max(0, total.cacheReadTokens - recorded.cacheReadTokens),
 		cacheWriteTokens: Math.max(0, total.cacheWriteTokens - recorded.cacheWriteTokens),
-	reasoningTokens: Math.max(0, total.reasoningTokens - recorded.reasoningTokens),
-	costUsd: Math.max(0, total.costUsd - recorded.costUsd),
-	toolCalls: 0,
-	wallTimeMs: Math.max(0, total.wallTimeMs - recorded.wallTimeMs),
+		reasoningTokens: Math.max(0, total.reasoningTokens - recorded.reasoningTokens),
+		costUsd: Math.max(0, total.costUsd - recorded.costUsd),
+		toolCalls: 0,
+		wallTimeMs: Math.max(0, total.wallTimeMs - recorded.wallTimeMs),
 	};
 }
 
@@ -91,7 +94,7 @@ async function snapshotId(root: string): Promise<string> {
 	return new Bun.CryptoHasher("sha256").update(manifest.join("\n")).digest("hex");
 }
 
-async function createAuditSnapshot(workspace: string): Promise<AuditSnapshot> {
+async function createAuditSnapshot(workspace: string, signal: AbortSignal): Promise<AuditSnapshot> {
 	const createdRoot = await fs.mkdtemp(path.join(os.tmpdir(), "longtime-audit-"));
 	const root = await fs.realpath(createdRoot);
 	const manifest: Array<{ path: string; hash: string; bytes: number }> = [];
@@ -100,6 +103,7 @@ async function createAuditSnapshot(workspace: string): Promise<AuditSnapshot> {
 	try {
 		const files = [...new Bun.Glob("**/*").scanSync({ cwd: workspace, dot: true, onlyFiles: true })].sort();
 		for (const relative of files) {
+			signal.throwIfAborted();
 			if (excluded(relative)) continue;
 			const source = path.join(workspace, relative);
 			let stat: import("node:fs").Stats;
@@ -170,6 +174,7 @@ function normalizedResult(
 ): SubmittedAudit {
 	const knownCriteria = new Set(criteria.map(item => item.id));
 	const knownEvidence = new Set(evidence.map(item => item.id));
+	const substantiveEvidence = new Set(evidence.filter(item => item.kind !== "list").map(item => item.id));
 	const criterionResults = submitted.criterionResults.filter(item => knownCriteria.has(item.criterionId));
 	const missingEvidence = [...submitted.missingEvidence];
 	for (const result of criterionResults) {
@@ -184,9 +189,13 @@ function normalizedResult(
 	if (verdict === "pass") {
 		for (const criterion of criteria.filter(item => item.required)) {
 			const result = criterionResults.find(item => item.criterionId === criterion.id);
-			if (!result || result.status !== "pass" || result.evidenceIds.length === 0) {
+			if (
+				!result ||
+				result.status !== "pass" ||
+				!result.evidenceIds.some(id => substantiveEvidence.has(id))
+			) {
 				verdict = "inconclusive";
-				missingEvidence.push(`Required criterion ${criterion.id} lacks an evidence-backed pass.`);
+				missingEvidence.push(`Required criterion ${criterion.id} lacks a read/search-backed pass.`);
 			}
 		}
 	}
@@ -236,6 +245,15 @@ export async function runShadowSemanticAudit(options: {
 	const auditId = `audit-${crypto.randomUUID()}`;
 	const auditSessionId = `${state.id}:semantic-audit:${state.round}:${auditId}`;
 	const usage = emptyUsage();
+	const auditClockStarted = performance.now();
+	let accountedAuditWallTime = 0;
+	const accountAuditWallTime = (): void => {
+		const elapsed = performance.now() - auditClockStarted;
+		const delta = Math.max(0, elapsed - accountedAuditWallTime);
+		usage.wallTimeMs += delta;
+		state.usage.wallTimeMs += delta;
+		accountedAuditWallTime = elapsed;
+	};
 	let snapshot: AuditSnapshot | undefined;
 	let submitted: SubmittedAudit | undefined;
 	const evidence: SemanticAuditEvidence[] = [];
@@ -245,22 +263,33 @@ export async function runShadowSemanticAudit(options: {
 		return item;
 	};
 	try {
-		snapshot = await createAuditSnapshot(state.workspace);
-		const tools = [
+		snapshot = await createAuditSnapshot(state.workspace, signal);
+		const tools: Tool[] = [
 			{
 				name: "audit_list_files",
 				description: "List files in the isolated audit snapshot. This tool is read-only.",
-				parameters: Type.Object({ pattern: Type.Optional(Type.String()), limit: Type.Optional(Type.Number()) }),
+				parameters: Type.Object({
+					pattern: Type.Optional(Type.String({ maxLength: 1_000 })),
+					limit: Type.Optional(Type.Number({ minimum: 1, maximum: 5_000 })),
+				}),
 			},
 			{
 				name: "audit_read_file",
 				description: "Read a UTF-8 file from the isolated audit snapshot and create audit evidence.",
-				parameters: Type.Object({ path: Type.String(), offset: Type.Optional(Type.Number()), limit: Type.Optional(Type.Number()) }),
+				parameters: Type.Object({
+					path: Type.String({ maxLength: 1_000 }),
+					offset: Type.Optional(Type.Number({ minimum: 1 })),
+					limit: Type.Optional(Type.Number({ minimum: 1, maximum: 2_000 })),
+				}),
 			},
 			{
 				name: "audit_search",
 				description: "Search snapshot text with a JavaScript regular expression and create audit evidence.",
-				parameters: Type.Object({ pattern: Type.String(), files: Type.Optional(Type.String()), limit: Type.Optional(Type.Number()) }),
+				parameters: Type.Object({
+					pattern: Type.String({ maxLength: 2_000 }),
+					files: Type.Optional(Type.String({ maxLength: 1_000 })),
+					limit: Type.Optional(Type.Number({ minimum: 1, maximum: 2_000 })),
+				}),
 			},
 			{
 				name: "submit_semantic_audit",
@@ -274,11 +303,12 @@ export async function runShadowSemanticAudit(options: {
 					]),
 					criterionResults: Type.Array(
 						Type.Object({
-							criterionId: Type.String(),
+							criterionId: Type.String({ maxLength: 200 }),
 							status: Type.Union([Type.Literal("pass"), Type.Literal("fail"), Type.Literal("inconclusive")]),
-							reason: Type.String(),
-							evidenceIds: Type.Array(Type.String()),
+							reason: Type.String({ maxLength: 4_000 }),
+							evidenceIds: Type.Array(Type.String({ maxLength: 200 }), { maxItems: 50 }),
 						}),
+						{ maxItems: 200 },
 					),
 					contractDrift: Type.Array(
 						Type.Object({
@@ -287,11 +317,12 @@ export async function runShadowSemanticAudit(options: {
 								Type.Literal("unsupported_added_constraint"),
 								Type.Literal("changed_meaning"),
 							]),
-							description: Type.String(),
-							claimId: Type.Optional(Type.String()),
+							description: Type.String({ maxLength: 4_000 }),
+							claimId: Type.Optional(Type.String({ maxLength: 200 })),
 						}),
+						{ maxItems: 200 },
 					),
-					missingEvidence: Type.Array(Type.String()),
+					missingEvidence: Type.Array(Type.String({ maxLength: 2_000 }), { maxItems: 200 }),
 					confidence: Type.Number({ minimum: 0, maximum: 1 }),
 				}),
 			},
@@ -319,8 +350,8 @@ export async function runShadowSemanticAudit(options: {
 		});
 		await repository.save(state);
 		const result = await modelPort.runRound({
-			model: state.model,
-				sessionId: auditSessionId,
+			model: state.auditModel ?? state.model,
+			sessionId: auditSessionId,
 			systemPrompt: semanticAuditSystemPrompt(),
 			userPrompt: `Audit the locked criteria against the isolated snapshot.\n\n${JSON.stringify({
 				originalObjective: state.contract.objective,
@@ -336,9 +367,10 @@ export async function runShadowSemanticAudit(options: {
 			}, null, 2)}`,
 			tools,
 			maxTurns: 12,
-			maxOutputTokens: 16_000,
+			maxOutputTokens: Math.max(1, Math.min(16_000, remainingTokens(state))),
 			signal,
 			onUsage: async increment => {
+				accountAuditWallTime();
 				addUsage(recordedUsage, increment);
 				addUsage(usage, increment);
 				addUsage(state.usage, increment);
@@ -349,26 +381,57 @@ export async function runShadowSemanticAudit(options: {
 					usage: increment,
 				});
 				await repository.save(state);
+				if (budgetPhase(state) === "exhausted") {
+					throw new Error("Run budget was exhausted during semantic audit.");
+				}
 			},
 			executeTool: async (call: ModelToolCall): Promise<ModelToolResult> => {
+				accountAuditWallTime();
+				if (budgetPhase(state) === "exhausted") {
+					return { text: "Error: run budget exhausted during semantic audit.", isError: true, stop: true };
+				}
+				if (state.usage.toolCalls >= state.budget.maxToolCalls) {
+					return { text: "Error: run tool-call budget exhausted during semantic audit.", isError: true, stop: true };
+				}
 				state.usage.toolCalls += 1;
 				usage.toolCalls += 1;
+				await repository.save(state);
+				try {
+					const providerCall: ToolCall = {
+						type: "toolCall",
+						id: call.id,
+						name: call.name,
+						arguments: call.arguments,
+					};
+					validateToolCall(tools, providerCall);
+				} catch (error) {
+					return { text: `Error: ${error instanceof Error ? error.message : String(error)}`, isError: true };
+				}
 				if (call.name === "audit_list_files") {
-					const pattern = typeof call.arguments.pattern === "string" ? call.arguments.pattern : "**/*";
-					const limit = Math.max(1, Math.min(5_000, Number(call.arguments.limit ?? 500)));
-					const files = [...new Bun.Glob(pattern).scanSync({ cwd: snapshot!.root, dot: true, onlyFiles: true })]
-						.sort()
-						.slice(0, limit);
-					const item = addAuditEvidence({
-						kind: "list",
-						subject: pattern,
-						summary: `Listed ${files.length} snapshot files`,
-						excerpt: files.slice(0, 100).join("\n").slice(0, 4_000),
-					});
-					return { text: `${files.join("\n")}\n[audit-evidence:${item.id}]`, isError: false };
+					try {
+						signal.throwIfAborted();
+						const pattern = validateRelativeGlob(
+							typeof call.arguments.pattern === "string" ? call.arguments.pattern : "**/*",
+						);
+						const limit = Math.max(1, Math.min(5_000, Number(call.arguments.limit ?? 500)));
+						const files = [...new Bun.Glob(pattern).scanSync({ cwd: snapshot!.root, dot: true, onlyFiles: true })]
+							.sort()
+							.slice(0, limit);
+						for (const relative of files) await safePath(snapshot!.root, relative);
+						const item = addAuditEvidence({
+							kind: "list",
+							subject: pattern,
+							summary: `Listed ${files.length} snapshot files`,
+							excerpt: files.slice(0, 100).join("\n").slice(0, 4_000),
+						});
+						return { text: `${bounded(files.join("\n"))}\n[audit-evidence:${item.id}]`, isError: false };
+					} catch (error) {
+						return { text: `Error: ${error instanceof Error ? error.message : String(error)}`, isError: true };
+					}
 				}
 				if (call.name === "audit_read_file") {
 					try {
+						signal.throwIfAborted();
 						const requested = String(call.arguments.path ?? "");
 						const file = await safePath(snapshot!.root, requested);
 						const text = await Bun.file(file).text();
@@ -390,14 +453,18 @@ export async function runShadowSemanticAudit(options: {
 				if (call.name === "audit_search") {
 					try {
 						const pattern = String(call.arguments.pattern ?? "");
-						const expression = new RegExp(pattern);
-						const filesPattern = typeof call.arguments.files === "string" ? call.arguments.files : "**/*";
+						const expression = compileSearchRegex(pattern);
+						const filesPattern = validateRelativeGlob(
+							typeof call.arguments.files === "string" ? call.arguments.files : "**/*",
+						);
 						const limit = Math.max(1, Math.min(2_000, Number(call.arguments.limit ?? 300)));
 						const matches: string[] = [];
 						for (const relative of new Bun.Glob(filesPattern).scanSync({ cwd: snapshot!.root, dot: true, onlyFiles: true })) {
+							signal.throwIfAborted();
 							let text: string;
-							try { text = await Bun.file(path.join(snapshot!.root, relative)).text(); } catch { continue; }
+							try { text = await Bun.file(await safePath(snapshot!.root, relative)).text(); } catch { continue; }
 							for (const [index, line] of text.split("\n").entries()) {
+								if (index % 1_000 === 0) signal.throwIfAborted();
 								if (!expression.test(line)) continue;
 								matches.push(`${relative}:${index + 1}:${line.slice(0, 2_000)}`);
 								if (matches.length >= limit) break;
@@ -433,9 +500,22 @@ export async function runShadowSemanticAudit(options: {
 				return { text: `Error: unknown audit tool '${call.name}'.`, isError: true };
 			},
 		});
+		accountAuditWallTime();
 		addUsage(usage, usageDifference(result.usage, recordedUsage));
 		addUsage(state.usage, usageDifference(result.usage, recordedUsage));
 		if (!submitted) throw new Error("Semantic Auditor did not submit a structured result.");
+		if (submitted.verdict === "pass" && snapshot.skippedPaths.length > 0) {
+			submitted = {
+				...submitted,
+				verdict: "inconclusive",
+				missingEvidence: [
+					...new Set([
+						...submitted.missingEvidence,
+						`Audit snapshot omitted ${snapshot.skippedPaths.length} path(s) because of size limits.`,
+					]),
+				],
+			};
+		}
 		if (!(await snapshot.verify())) throw new Error("Semantic audit snapshot changed during read-only review.");
 		const record: SemanticAuditRecord = {
 			id: auditId,
@@ -468,6 +548,7 @@ export async function runShadowSemanticAudit(options: {
 		await repository.save(state);
 		return record;
 	} catch (error) {
+		accountAuditWallTime();
 		const record: SemanticAuditRecord = {
 			id: auditId,
 			round: state.round,
