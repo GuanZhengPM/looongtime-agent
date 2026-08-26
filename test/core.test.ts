@@ -1613,6 +1613,10 @@ describe("long-running harness", () => {
 			repository,
 			modelPort: model,
 			tools: await createTools(workspace),
+			// This test exercises multi-round completion, not the host permission
+			// prompt. Linux CI intentionally has no supported local sandbox, so
+			// authorize the fixture's known smoke-test command explicitly.
+			observer: { authorize: async () => true },
 		});
 		expect(final.status).toBe("completed");
 		expect(final.round).toBe(2);
@@ -1779,6 +1783,9 @@ describe("long-running harness", () => {
 				await new Promise<void>((resolve, reject) => {
 					const onAbort = (): void => reject(request.signal.reason ?? new Error("aborted"));
 					request.signal.addEventListener("abort", onAbort, { once: true });
+					// The controller may abort while onUsage is persisting its event. An
+					// AbortSignal does not replay an earlier event to a late listener.
+					if (request.signal.aborted) onAbort();
 				});
 				return { output: "", usage: emptyUsage(), turns: 1 };
 			},
