@@ -1,5 +1,5 @@
 {
-	"name": "longtime-agent",
+	"name": "looongtime-agent",
 	"version": "0.1.0",
 	"description": "Long-horizon coding agent harness with durable state and evidence-gated completion",
 	"type": "module",

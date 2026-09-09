@@ -1,4 +1,4 @@
-# Looooongtime
+# looongtime-agent
 
 > Long-horizon execution for coding agents, with durable state and verifiable completion.
 > 面向 Coding Agent 的长程执行、持久状态与可验证完成。
@@ -48,8 +48,8 @@ Goal Contract
 当前需要 Bun `1.3.14+`：
 
 ```sh
-git clone https://github.com/GuanZhengPM/longtime-agent.git
-cd longtime-agent
+git clone https://github.com/GuanZhengPM/looongtime-agent.git
+cd looongtime-agent
 bun install --ignore-scripts
 bun run check
 bun test
@@ -245,8 +245,8 @@ The model owns exploration, reasoning, and implementation. The harness owns stat
 Bun `1.3.14+` is currently required:
 
 ```sh
-git clone https://github.com/GuanZhengPM/longtime-agent.git
-cd longtime-agent
+git clone https://github.com/GuanZhengPM/looongtime-agent.git
+cd looongtime-agent
 bun install --ignore-scripts
 bun run check
 bun test
