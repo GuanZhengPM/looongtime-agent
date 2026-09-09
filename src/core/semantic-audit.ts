@@ -25,7 +25,7 @@ const SNAPSHOT_TOTAL_LIMIT = 100 * 1024 * 1024;
 const READ_CHARACTER_LIMIT = 120_000;
 const EXCLUDED_DIRECTORIES = new Set([
 	".git",
-	".longtime",
+	".looongtime",
 	".continuum",
 	"node_modules",
 	".cache",
@@ -95,7 +95,7 @@ async function snapshotId(root: string): Promise<string> {
 }
 
 async function createAuditSnapshot(workspace: string, signal: AbortSignal): Promise<AuditSnapshot> {
-	const createdRoot = await fs.mkdtemp(path.join(os.tmpdir(), "longtime-audit-"));
+	const createdRoot = await fs.mkdtemp(path.join(os.tmpdir(), "looongtime-audit-"));
 	const root = await fs.realpath(createdRoot);
 	const manifest: Array<{ path: string; hash: string; bytes: number }> = [];
 	const skippedPaths: string[] = [];
@@ -220,7 +220,7 @@ function normalizedResult(
 }
 
 function semanticAuditSystemPrompt(): string {
-	return `You are a Falsification Auditor in Longtime. You are not the executor and must not continue implementation.
+	return `You are a Falsification Auditor in Looongtime. You are not the executor and must not continue implementation.
 
 Your job is to try to disprove the completion claims against the original locked criteria. Do not use keyword matching as semantic validation. Read the actual snapshot, look for counterexamples, omitted requirements, unsupported assumptions, and contract drift.
 

@@ -1,6 +1,6 @@
 # Security policy
 
-Longtime executes model-selected tools and must be treated as security-sensitive software. It is not a container, VM, or privilege boundary.
+Looongtime executes model-selected tools and must be treated as security-sensitive software. It is not a container, VM, or privilege boundary.
 
 ## Supported versions
 

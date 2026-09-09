@@ -45,7 +45,7 @@ function boundedToolResult(text: string, limit = 24_000): string {
 
 function resolveModel(models: Models, provider: string, modelId: string): Model<Api> {
 	const model = models.getModel(provider, modelId);
-	if (!model) throw new Error(`Unknown model '${provider}/${modelId}'. Use 'longtime models ${provider}' to inspect models.`);
+	if (!model) throw new Error(`Unknown model '${provider}/${modelId}'. Use 'looongtime models ${provider}' to inspect models.`);
 	return model;
 }
 

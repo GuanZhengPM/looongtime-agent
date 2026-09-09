@@ -18,11 +18,11 @@ The model and workspace content are untrusted. The Harness, Tool Registry, Compl
 - Shell commands require policy authorization and run in a local or inherited sandbox when available.
 - Explicit deletion or overwrite, in-place edits, output redirection, Git history or worktree mutation, dependency installation, dynamic command execution, external-service CLIs, and named home or sensitive paths are classified as high risk even when they target the workspace.
 - Sandboxed network access is denied by default; enabling it is an explicit Run setting.
-- Common credential directories, including Longtime's own credential store, are masked from local sandbox reads.
+- Common credential directories, including Looongtime's own credential store, are masked from local sandbox reads.
 - Provider secrets are removed from the Shell environment and never written to Run events.
 - Tool schemas bound paths, commands, arrays, and write payloads. Text reads, repository searches, streamed Shell output, and model-facing tool responses have explicit size limits; search rejects common exponential-backtracking regular expressions and observes cancellation between files and line batches.
 - Arbitrary Shell success cannot produce completion verification. Trusted verification must be recognized or locked into the Goal Contract and mapped to Requirement IDs.
-- Workspace fingerprints invalidate current proof after edits made outside Longtime.
+- Workspace fingerprints invalidate current proof after edits made outside Looongtime.
 - High-risk semantic completion can be configured to require a passing isolated audit.
 
 ## Residual risks

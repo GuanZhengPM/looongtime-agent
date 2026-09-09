@@ -1,4 +1,4 @@
-# Longtime Architecture / Longtime 架构
+# Looongtime Architecture / Looongtime 架构
 
 [简体中文](#简体中文) · [English](#english)
 
@@ -10,7 +10,7 @@
 
 ### 概览
 
-Longtime 是一个面向长程软件工程任务的 Agent Harness。模型负责分析和执行任务，Harness 负责保存任务状态、管理工具和权限、记录证据、恢复中断的 Run，并判断任务是否完成。
+Looongtime 是一个面向长程软件工程任务的 Agent Harness。模型负责分析和执行任务，Harness 负责保存任务状态、管理工具和权限、记录证据、恢复中断的 Run，并判断任务是否完成。
 
 一次 Run 由多个有界 Round 组成。每个 Round 从持久状态生成一份当前工作上下文，模型完成一个 Frontier，工具记录执行结果，Harness 再把有效变化写回状态。
 
@@ -176,10 +176,10 @@ Shell 风险分类按完整命令检查显式删除或覆盖、重定向写入�
 
 ### 恢复与并发
 
-Longtime 的默认数据目录为 `~/.longtime`：
+Looongtime 的默认数据目录为 `~/.looongtime`：
 
 ```text
-~/.longtime/
+~/.looongtime/
 ├── config.json
 ├── credentials.json
 └── runs/<workspace-key>/<run-id>/
@@ -189,11 +189,11 @@ Longtime 的默认数据目录为 `~/.longtime`：
     └── runner.log
 ```
 
-一次性 CLI 在收到 SIGINT 或 SIGTERM 时保存 `paused` 状态。`resume` 从最近状态继续执行，并用工作区 Fingerprint 检测 Longtime 外部发生的修改；发现变化时会推进全局 Mutation Epoch、清空可能过期的 Artifact 导航并失效旧 Evidence/Claim。`run.lock` 保存 PID、随机 Token 和心跳，同一 Run 同时只有一个写入者；死亡进程遗留的 Lease 可以恢复。
+一次性 CLI 在收到 SIGINT 或 SIGTERM 时保存 `paused` 状态。`resume` 从最近状态继续执行，并用工作区 Fingerprint 检测 Looongtime 外部发生的修改；发现变化时会推进全局 Mutation Epoch、清空可能过期的 Artifact 导航并失效旧 Evidence/Claim。`run.lock` 保存 PID、随机 Token 和心跳，同一 Run 同时只有一个写入者；死亡进程遗留的 Lease 可以恢复。
 
 ### Provider 与终端
 
-Longtime 通过 `@earendil-works/pi-ai` 接入 Provider。ModelPort 统一模型选择、Reasoning、工具调用、Usage、Session 与缓存信息；OAuth 和 API Key 由 Provider 层处理。
+Looongtime 通过 `@earendil-works/pi-ai` 接入 Provider。ModelPort 统一模型选择、Reasoning、工具调用、Usage、Session 与缓存信息；OAuth 和 API Key 由 Provider 层处理。
 
 终端提供流式输出与以下主要命令：
 
@@ -225,7 +225,7 @@ Longtime 通过 `@earendil-works/pi-ai` 接入 Provider。ModelPort 统一模型
 
 ### Overview
 
-Longtime is an agent harness for long-horizon software-engineering tasks. The model analyzes and executes the task; the harness persists task state, manages tools and permissions, records evidence, recovers interrupted runs, and evaluates completion.
+Looongtime is an agent harness for long-horizon software-engineering tasks. The model analyzes and executes the task; the harness persists task state, manages tools and permissions, records evidence, recovers interrupted runs, and evaluates completion.
 
 A run consists of bounded rounds. Each round compiles a current working context from durable state, lets the model execute one frontier, records tool results, and commits valid changes back to state.
 
@@ -391,10 +391,10 @@ Shell risk classification inspects the complete command for explicit deletion or
 
 ### Recovery and concurrency
 
-The default Longtime data directory is `~/.longtime`:
+The default Looongtime data directory is `~/.looongtime`:
 
 ```text
-~/.longtime/
+~/.looongtime/
 ├── config.json
 ├── credentials.json
 └── runs/<workspace-key>/<run-id>/
@@ -408,7 +408,7 @@ The one-shot CLI saves a `paused` state on SIGINT or SIGTERM. `resume` continues
 
 ### Providers and terminal
 
-Longtime connects providers through `@earendil-works/pi-ai`. ModelPort normalizes model selection, reasoning, tool calls, usage, sessions, and cache metadata. OAuth and API-key handling remain in the provider layer.
+Looongtime connects providers through `@earendil-works/pi-ai`. ModelPort normalizes model selection, reasoning, tool calls, usage, sessions, and cache metadata. OAuth and API-key handling remain in the provider layer.
 
 The terminal provides streaming output and these primary commands:
 

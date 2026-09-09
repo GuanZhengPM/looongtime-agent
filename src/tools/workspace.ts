@@ -3,12 +3,12 @@ import * as os from "node:os";
 import * as path from "node:path";
 import type { EvidenceKind } from "../core/types";
 import type { ShellRisk } from "./types";
-import { longtimeHome } from "../paths";
+import { looongtimeHome } from "../paths";
 
 const MAX_OUTPUT_CHARACTERS = 60_000;
 const SNAPSHOT_EXCLUDED_DIRECTORIES = new Set([
 	".cache",
-	".longtime",
+	".looongtime",
 	".continuum",
 	".git",
 	".gocache",
@@ -61,7 +61,7 @@ const HIGH_RISK_COMMANDS = [
 	// stores, but classification must still request authority when a command
 	// names a home path, parent traversal, or sensitive store explicitly.
 	/(?:^|[\s"'=])(?:~(?:\/|$)|\.\.(?:\/|\\)|\$HOME\b|\$\{HOME\}|\/(?:Users|home|root|etc|private|Volumes)(?:\/|\b))/i,
-	/(?:^|[\/\\])\.(?:ssh|aws|gnupg|codex|claude|longtime|continuum)(?:[\/\\]|\b)/i,
+	/(?:^|[\/\\])\.(?:ssh|aws|gnupg|codex|claude|looongtime|continuum)(?:[\/\\]|\b)/i,
 	/(?:^|[\/\\])\.(?:npmrc|netrc)(?:\b|$)|\/etc\/(?:shadow|sudoers)\b/i,
 ];
 const LOW_RISK_COMMANDS = [
@@ -148,6 +148,7 @@ export function shellSandboxAvailable(): boolean {
 function inheritedSandboxActive(): boolean {
 	return (
 		Boolean(process.env.CODEX_SANDBOX) ||
+		process.env.LOOONGTIME_INHERITED_SANDBOX === "1" ||
 		process.env.LONGTIME_INHERITED_SANDBOX === "1" ||
 		process.env.CONTINUUM_INHERITED_SANDBOX === "1"
 	);
@@ -437,6 +438,7 @@ function shellEnvironment(toolCacheRoot: string): Record<string, string> {
 		"COLORTERM",
 		"CODEX_SANDBOX",
 		"CODEX_SANDBOX_NETWORK_DISABLED",
+		"LOOONGTIME_INHERITED_SANDBOX",
 		"LONGTIME_INHERITED_SANDBOX",
 		"CONTINUUM_INHERITED_SANDBOX",
 		"FORCE_COLOR",
@@ -500,9 +502,9 @@ async function sandboxedInvocation(command: string, cwd: string, allowNetwork: b
 				path.join(home, ".config", "gcloud"),
 				path.join(home, ".codex"),
 				path.join(home, ".claude"),
-				path.join(home, ".longtime"),
+				path.join(home, ".looongtime"),
 				path.join(home, ".continuum"),
-				longtimeHome(),
+				looongtimeHome(),
 			]),
 		];
 		const sensitiveFiles = [path.join(home, ".npmrc"), path.join(home, ".netrc")];
@@ -528,9 +530,9 @@ async function sandboxedInvocation(command: string, cwd: string, allowNetwork: b
 			path.join(home, ".config", "gcloud"),
 			path.join(home, ".codex"),
 			path.join(home, ".claude"),
-			path.join(home, ".longtime"),
+			path.join(home, ".looongtime"),
 			path.join(home, ".continuum"),
-			longtimeHome(),
+			looongtimeHome(),
 		])) {
 			try {
 				if ((await fs.lstat(candidate)).isDirectory()) masks.push("--tmpfs", candidate);
@@ -586,7 +588,7 @@ export async function runShell(options: {
 	const invocation = options.sandbox
 		? await sandboxedInvocation(options.command, options.cwd, options.allowNetwork ?? false)
 		: { argv: shellCommandInvocation(options.command), sandboxed: inheritedSandboxActive() };
-	const toolCacheRoot = path.join(os.tmpdir(), "longtime-tool-cache", hashText(options.cwd).slice(0, 16));
+	const toolCacheRoot = path.join(os.tmpdir(), "looongtime-tool-cache", hashText(options.cwd).slice(0, 16));
 	await fs.mkdir(toolCacheRoot, { recursive: true });
 	const child = Bun.spawn(invocation.argv, {
 		cwd: options.cwd,

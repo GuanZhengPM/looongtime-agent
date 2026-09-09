@@ -8,26 +8,26 @@ import { RunRepository } from "./core/repository";
 import { applyBudgetOverrides, createRunState } from "./core/state";
 import type { BudgetConfig, ModelSelection, PermissionMode, RunState, SemanticAuditMode } from "./core/types";
 import { PiModelsPort } from "./providers/pi-models";
-import { longtimeModel } from "./paths";
+import { looongtimeModel } from "./paths";
 import { runAuthCommand } from "./providers/auth-cli";
 import { createTools } from "./tools/registry";
 import { Workspace } from "./tools/workspace";
 import { createTerminalObserver, printRunSummary } from "./ui/terminal";
 import { runInteractive } from "./ui/interactive";
 
-const HELP = `Longtime — progress-driven long-running coding agent
+const HELP = `Looongtime — progress-driven long-running coding agent
 
 Usage:
-  longtime                         Interactive π-style terminal
-  longtime chat [options]          Interactive terminal
-  longtime run [options] <task>
-  longtime resume [options] <run-id>
-  longtime status <run-id>
-  longtime events <run-id>
-  longtime models [provider]
-  longtime auth list
-  longtime auth <status|login|logout> <provider> [api_key|oauth]
-  longtime auth import-codex       Reuse the current Codex CLI ChatGPT login
+  looongtime                         Interactive π-style terminal
+  looongtime chat [options]          Interactive terminal
+  looongtime run [options] <task>
+  looongtime resume [options] <run-id>
+  looongtime status <run-id>
+  looongtime events <run-id>
+  looongtime models [provider]
+  looongtime auth list
+  looongtime auth <status|login|logout> <provider> [api_key|oauth]
+  looongtime auth import-codex       Reuse the current Codex CLI ChatGPT login
 
 Run options:
   --model <provider/model-id>     Model from the pi-ai catalog
@@ -58,8 +58,8 @@ Run options:
   --quiet                        Hide streaming model/tool output
 
 Environment:
-  LONGTIME_MODEL                 Default provider/model-id
-  LONGTIME_HOME                  State directory (default: ~/.longtime)
+  LOOONGTIME_MODEL                 Default provider/model-id
+  LOOONGTIME_HOME                  State directory (default: ~/.looongtime)
   Provider API keys are resolved by @earendil-works/pi-ai.
 `;
 
@@ -273,8 +273,8 @@ async function runWithProcessSignals(options: Parameters<typeof runHarness>[0]):
 
 async function selectedModel(args: RunArguments): Promise<ModelSelection> {
 	const config = await loadConfig();
-	const model = args.model ?? longtimeModel() ?? config.defaultModel;
-	if (!model) throw new Error("No model selected. Pass --model provider/model-id or set LONGTIME_MODEL.");
+	const model = args.model ?? looongtimeModel() ?? config.defaultModel;
+	if (!model) throw new Error("No model selected. Pass --model provider/model-id or set LOOONGTIME_MODEL.");
 	return parseModelSelection(model, args.reasoning ?? config.reasoning ?? "high");
 }
 
@@ -421,7 +421,7 @@ async function main(): Promise<void> {
 	const [command, ...args] = process.argv.slice(2);
 	if (!command && process.stdin.isTTY && process.stdout.isTTY) {
 		const config = await loadConfig();
-		const configured = longtimeModel() ?? config.defaultModel;
+		const configured = looongtimeModel() ?? config.defaultModel;
 		await runInteractive({
 			workspace: process.cwd(),
 			...(configured ? { model: parseModelSelection(configured, config.reasoning ?? "high") } : {}),
@@ -439,7 +439,7 @@ async function main(): Promise<void> {
 	if (command === "chat") {
 		const parsed = parseRunArguments(args);
 		const config = await loadConfig();
-		const modelValue = parsed.model ?? longtimeModel() ?? config.defaultModel;
+		const modelValue = parsed.model ?? looongtimeModel() ?? config.defaultModel;
 		await runInteractive({
 			workspace: parsed.cwd,
 			...(modelValue
@@ -460,6 +460,6 @@ async function main(): Promise<void> {
 }
 
 await main().catch(error => {
-	process.stderr.write(`longtime: ${error instanceof Error ? error.message : String(error)}\n`);
+	process.stderr.write(`looongtime: ${error instanceof Error ? error.message : String(error)}\n`);
 	process.exitCode = 1;
 });

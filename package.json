@@ -5,7 +5,7 @@
 	"type": "module",
 	"private": true,
 	"bin": {
-		"longtime": "src/cli.ts"
+		"looongtime": "src/cli.ts"
 	},
 	"scripts": {
 		"start": "bun src/cli.ts",

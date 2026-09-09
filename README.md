@@ -5,9 +5,9 @@
 
 [简体中文](#简体中文) · [English](#english) · [Architecture / 架构](docs/architecture.md)
 
-Longtime 是一个面向长程软件工程任务的 Agent Harness。它将模型交互与持久任务状态、执行证据和完成判定解耦，使 Agent 能够跨多轮持续工作、在中断后恢复，并以当前证据而非模型自述作为完成依据。
+Looongtime 是一个面向长程软件工程任务的 Agent Harness。它将模型交互与持久任务状态、执行证据和完成判定解耦，使 Agent 能够跨多轮持续工作、在中断后恢复，并以当前证据而非模型自述作为完成依据。
 
-Longtime is a long-horizon execution harness for software-engineering agents. It separates model interaction from durable task state, execution evidence, and completion policy so an agent can work across many rounds, recover from interruption, and finish on current evidence rather than self-reported success.
+Looongtime is a long-horizon execution harness for software-engineering agents. It separates model interaction from durable task state, execution evidence, and completion policy so an agent can work across many rounds, recover from interruption, and finish on current evidence rather than self-reported success.
 
 ---
 
@@ -19,7 +19,7 @@ Longtime is a long-horizon execution harness for software-engineering agents. It
 
 长程任务需要处理的不只是上下文窗口，还包括状态持久化、证据时效、重复探索、暂时性故障和可复核的完成标准。仅延长对话或增加循环次数，无法解决这些运行时问题。
 
-Longtime 将任务组织为可恢复的执行 Frontier，并维护 `Requirement → Claim → Evidence` 证明图：
+Looongtime 将任务组织为可恢复的执行 Frontier，并维护 `Requirement → Claim → Evidence` 证明图：
 
 ```text
 Goal Contract
@@ -98,7 +98,7 @@ bun src/cli.ts run \
 
 ### Provider 与认证
 
-Longtime 的认证入口与固定版本的 π Provider 目录对齐。使用统一的 `provider/model-id`，凭据不会写入 Run Event Log。
+Looongtime 的认证入口与固定版本的 π Provider 目录对齐。使用统一的 `provider/model-id`，凭据不会写入 Run Event Log。
 
 | 使用场景 | Provider | 当前登录方式 | 示例 |
 | --- | --- | --- | --- |
@@ -134,17 +134,17 @@ bun src/cli.ts models <provider>
 bun src/cli.ts auth import-codex
 ```
 
-该兼容命令会将 Codex CLI 的 OAuth 凭据复制到 Longtime 独立的 `0600` 文件。此方式依赖 Codex 本地凭据格式，两个客户端也可能共享 refresh token 生命周期；长期任务建议使用 `auth login openai-codex oauth` 建立独立会话。
+该兼容命令会将 Codex CLI 的 OAuth 凭据复制到 Looongtime 独立的 `0600` 文件。此方式依赖 Codex 本地凭据格式，两个客户端也可能共享 refresh token 生命周期；长期任务建议使用 `auth login openai-codex oauth` 建立独立会话。
 
 凭据默认保存在：
 
 ```text
-~/.longtime/credentials.json
+~/.looongtime/credentials.json
 ```
 
-可以通过 `LONGTIME_HOME` 修改存储根目录。macOS Keychain、系统密钥环和外部 SecretRef 尚未接入，已列入发布前安全工作。
+可以通过 `LOOONGTIME_HOME` 修改存储根目录。macOS Keychain、系统密钥环和外部 SecretRef 尚未接入，已列入发布前安全工作。
 
-为兼容已有本地数据，若 `~/.longtime` 尚不存在但检测到 `~/.continuum`，Longtime 会继续读取旧目录；`CONTINUUM_HOME` 和 `CONTINUUM_MODEL` 也保留为兼容别名。新配置统一使用 `LONGTIME_HOME` 和 `LONGTIME_MODEL`。
+为兼容已有本地数据，若 `~/.looongtime` 尚不存在，Looongtime 会按 `~/.longtime`、`~/.continuum` 的顺序读取旧目录；`LONGTIME_HOME`/`LONGTIME_MODEL` 和 `CONTINUUM_HOME`/`CONTINUUM_MODEL` 也保留为兼容别名。新配置统一使用 `LOOONGTIME_HOME` 和 `LOOONGTIME_MODEL`。
 
 ### 长程运行配置
 
@@ -183,10 +183,10 @@ bun src/cli.ts resume --model openai/gpt-5.4 <run-id>
 
 ### 安全边界
 
-- Longtime 不是容器或虚拟机；它默认拥有启动用户在工作区内的权限。
+- Looongtime 不是容器或虚拟机；它默认拥有启动用户在工作区内的权限。
 - 路径和符号链接会做工作区边界检查，但强隔离仍应由容器、VM 或专用系统账户提供。
 - 支持的本地沙箱默认禁止网络；只有显式 `--allow-network` 才会开放，恢复 Run 时可用 `--deny-network` 再次关闭。继承的外层沙箱仍以外层策略为准。
-- Shell 环境不会继承 Provider Secret，本地沙箱会屏蔽常见凭据目录及 `~/.longtime`；这仍不能替代容器或 VM。
+- Shell 环境不会继承 Provider Secret，本地沙箱会屏蔽常见凭据目录及 `~/.looongtime`；这仍不能替代容器或 VM。
 - `runner.log`、状态和 Event Log 可能包含源码片段、命令与模型输出，不应提交到公开仓库。
 - `--allow-high-risk` 是显式预授权，不应在包含真实凭据或不可恢复数据的工作区使用。
 - `auth status` 当前只确认凭据存在且可解析／可刷新；首个模型请求才验证服务端是否接受。
@@ -204,7 +204,7 @@ bun src/cli.ts auth list
 
 ### 致谢
 
-Longtime 的 Provider/TUI 基础来自 [Pi Agent Harness](https://github.com/earendil-works/pi)。README 的 Provider 发现、认证状态和安全文档组织参考了 [OpenClaw](https://github.com/openclaw/openclaw)。Longtime 自己的重点是长程任务的 durable state、ProofGraph、失效语义、进度治理和可恢复执行。
+Looongtime 的 Provider/TUI 基础来自 [Pi Agent Harness](https://github.com/earendil-works/pi)。README 的 Provider 发现、认证状态和安全文档组织参考了 [OpenClaw](https://github.com/openclaw/openclaw)。Looongtime 自己的重点是长程任务的 durable state、ProofGraph、失效语义、进度治理和可恢复执行。
 
 ---
 
@@ -216,7 +216,7 @@ Longtime 的 Provider/TUI 基础来自 [Pi Agent Harness](https://github.com/ear
 
 Long-horizon work involves more than a larger context window: durable task state, evidence freshness, bounded exploration, transient-failure recovery, and completion criteria that can be independently reviewed.
 
-Longtime organizes a run into recoverable execution frontiers and maintains a `Requirement → Claim → Evidence` proof graph:
+Looongtime organizes a run into recoverable execution frontiers and maintains a `Requirement → Claim → Evidence` proof graph:
 
 ```text
 Goal Contract
@@ -290,7 +290,7 @@ bun src/cli.ts run \
 
 ### Models and authentication
 
-Longtime exposes the authentication catalog of its pinned Pi provider layer. Models use one `provider/model-id` convention, and credentials are not written to run events.
+Looongtime exposes the authentication catalog of its pinned Pi provider layer. Models use one `provider/model-id` convention, and credentials are not written to run events.
 
 | Use case | Provider | Current authentication | Example |
 | --- | --- | --- | --- |
@@ -316,7 +316,7 @@ bun src/cli.ts models <provider>
 Authentication boundaries:
 
 - `openai-codex` OAuth is ChatGPT subscription access. `openai` API-key access is usage-based API access. They are separate authentication and billing paths.
-- `anthropic` currently means direct API-key or subscription OAuth access. Longtime does not delegate inference to the Claude Code CLI and does not inherit the CLI's credential-refresh lifecycle.
+- `anthropic` currently means direct API-key or subscription OAuth access. Looongtime does not delegate inference to the Claude Code CLI and does not inherit the CLI's credential-refresh lifecycle.
 - GLM and Qwen currently use the Coding/Token Plan API-key routes exposed by Pi. Automatic import from their CLIs is not implemented.
 - Provider and model availability follows the pinned `pi-ai` dependency. An upgrade requires authentication and model regression testing.
 
@@ -326,11 +326,11 @@ An optional compatibility command can copy an existing local Codex CLI session:
 bun src/cli.ts auth import-codex
 ```
 
-This copies the Codex CLI OAuth credential into Longtime's independent `0600` file. The compatibility path depends on Codex's local credential format and may share refresh-token lifecycle across clients. For long-lived runs, prefer `auth login openai-codex oauth` to establish an independent session.
+This copies the Codex CLI OAuth credential into Looongtime's independent `0600` file. The compatibility path depends on Codex's local credential format and may share refresh-token lifecycle across clients. For long-lived runs, prefer `auth login openai-codex oauth` to establish an independent session.
 
-Credentials are stored at `~/.longtime/credentials.json` by default. `LONGTIME_HOME` changes the root. Keychain/system-keystore and external SecretRef support are not implemented yet.
+Credentials are stored at `~/.looongtime/credentials.json` by default. `LOOONGTIME_HOME` changes the root. Keychain/system-keystore and external SecretRef support are not implemented yet.
 
-For backward compatibility, Longtime continues to read `~/.continuum` when `~/.longtime` does not yet exist. `CONTINUUM_HOME` and `CONTINUUM_MODEL` remain accepted as legacy aliases; new configuration should use `LONGTIME_HOME` and `LONGTIME_MODEL`.
+For backward compatibility, Looongtime falls back to `~/.longtime` and then `~/.continuum` when `~/.looongtime` does not yet exist. `LONGTIME_HOME`/`LONGTIME_MODEL` and `CONTINUUM_HOME`/`CONTINUUM_MODEL` remain accepted as legacy aliases; new configuration should use `LOOONGTIME_HOME` and `LOOONGTIME_MODEL`.
 
 ### Endurance profiles
 
@@ -369,7 +369,7 @@ Recovery compiles the Goal Contract, Verified State, Evidence, and Frontier. It 
 
 ### Security boundary
 
-- Longtime is not a container or VM; it runs with the launching user's permissions.
+- Looongtime is not a container or VM; it runs with the launching user's permissions.
 - Workspace path and symlink checks are defense in depth, not strong isolation. Use a container, VM, or dedicated OS account for hostile tasks.
 - Supported local sandboxes deny network access by default; `--allow-network` is explicit and `--deny-network` revokes it on resume. An inherited outer sandbox retains its own policy.
 - Provider secrets are removed from the Shell environment and common credential directories are masked locally, but this is not a replacement for a container or VM.
@@ -390,7 +390,7 @@ bun src/cli.ts auth list
 
 ### Acknowledgements
 
-Longtime builds its provider/TUI foundation on the [Pi Agent Harness](https://github.com/earendil-works/pi). Its provider discovery, auth status, and security-document organization are informed by [OpenClaw](https://github.com/openclaw/openclaw). Longtime's own focus is long-horizon durable state, ProofGraph semantics, evidence invalidation, progress governance, and recoverable execution.
+Looongtime builds its provider/TUI foundation on the [Pi Agent Harness](https://github.com/earendil-works/pi). Its provider discovery, auth status, and security-document organization are informed by [OpenClaw](https://github.com/openclaw/openclaw). Looongtime's own focus is long-horizon durable state, ProofGraph semantics, evidence invalidation, progress governance, and recoverable execution.
 
 ## License
 

@@ -1,6 +1,6 @@
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
-import { longtimeHome } from "../paths";
+import { looongtimeHome } from "../paths";
 import type { RunEvent, RunState } from "./types";
 import { compactRunState, normalizeRunState } from "./state";
 
@@ -72,7 +72,7 @@ export class RunRepository {
 
 	constructor(workspace: string, runId: string) {
 		assertSafeRunId(runId);
-		this.runDirectory = path.join(longtimeHome(), "runs", workspaceKey(workspace), runId);
+		this.runDirectory = path.join(looongtimeHome(), "runs", workspaceKey(workspace), runId);
 		this.statePath = path.join(this.runDirectory, "state.json");
 		this.stateBackupPath = path.join(this.runDirectory, "state.prev.json");
 		this.eventsPath = path.join(this.runDirectory, "events.jsonl");
@@ -273,7 +273,7 @@ export class RunRepository {
 
 	static async find(runId: string): Promise<RunRepository> {
 		assertSafeRunId(runId);
-		const root = path.join(longtimeHome(), "runs");
+		const root = path.join(looongtimeHome(), "runs");
 		try {
 			await fs.access(root);
 		} catch (error) {

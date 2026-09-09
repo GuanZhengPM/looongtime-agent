@@ -1,8 +1,8 @@
 import * as path from "node:path";
 import type { ModelSelection, PermissionMode, SemanticAuditMode } from "./core/types";
-import { longtimeHome } from "./paths";
+import { looongtimeHome } from "./paths";
 
-export interface LongtimeConfig {
+export interface LooongtimeConfig {
 	defaultModel?: string;
 	reasoning?: ModelSelection["reasoning"];
 	permissionMode?: PermissionMode;
@@ -10,12 +10,12 @@ export interface LongtimeConfig {
 }
 
 export function configPath(): string {
-	return path.join(longtimeHome(), "config.json");
+	return path.join(looongtimeHome(), "config.json");
 }
 
-export async function loadConfig(): Promise<LongtimeConfig> {
+export async function loadConfig(): Promise<LooongtimeConfig> {
 	try {
-		return (await Bun.file(configPath()).json()) as LongtimeConfig;
+		return (await Bun.file(configPath()).json()) as LooongtimeConfig;
 	} catch (error) {
 		if ((error as NodeJS.ErrnoException).code === "ENOENT") return {};
 		throw error;

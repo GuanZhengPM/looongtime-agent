@@ -39,13 +39,15 @@ import {
 import { FileCredentialStore } from "../src/providers/credential-store";
 import { importCodexCliAuth } from "../src/providers/auth-cli";
 import { PiModelsPort } from "../src/providers/pi-models";
-import { longtimeHome, longtimeModel } from "../src/paths";
+import { looongtimeHome, looongtimeModel } from "../src/paths";
 import { createModels, fauxAssistantMessage, fauxProvider, fauxToolCall, Type } from "@earendil-works/pi-ai";
 
 const temporaryDirectories: string[] = [];
 const selection: ModelSelection = { provider: "faux", modelId: "coding", reasoning: "high" };
+const originalLooongtimeHome = process.env.LOOONGTIME_HOME;
 const originalLongtimeHome = process.env.LONGTIME_HOME;
 const originalContinuumHome = process.env.CONTINUUM_HOME;
+const originalLooongtimeModel = process.env.LOOONGTIME_MODEL;
 const originalLongtimeModel = process.env.LONGTIME_MODEL;
 const originalContinuumModel = process.env.CONTINUUM_MODEL;
 
@@ -57,10 +59,14 @@ async function temporaryDirectory(prefix: string): Promise<string> {
 
 afterEach(async () => {
 	await Promise.all(temporaryDirectories.splice(0).map(item => fs.rm(item, { recursive: true, force: true })));
+	if (originalLooongtimeHome === undefined) delete process.env.LOOONGTIME_HOME;
+	else process.env.LOOONGTIME_HOME = originalLooongtimeHome;
 	if (originalLongtimeHome === undefined) delete process.env.LONGTIME_HOME;
 	else process.env.LONGTIME_HOME = originalLongtimeHome;
 	if (originalContinuumHome === undefined) delete process.env.CONTINUUM_HOME;
 	else process.env.CONTINUUM_HOME = originalContinuumHome;
+	if (originalLooongtimeModel === undefined) delete process.env.LOOONGTIME_MODEL;
+	else process.env.LOOONGTIME_MODEL = originalLooongtimeModel;
 	if (originalLongtimeModel === undefined) delete process.env.LONGTIME_MODEL;
 	else process.env.LONGTIME_MODEL = originalLongtimeModel;
 	if (originalContinuumModel === undefined) delete process.env.CONTINUUM_MODEL;
@@ -567,7 +573,7 @@ describe("permission policy", () => {
 	});
 
 	test("ignores disposable build caches when detecting workspace mutations", async () => {
-		const root = await temporaryDirectory("longtime-snapshot-caches-");
+		const root = await temporaryDirectory("looongtime-snapshot-caches-");
 		await Promise.all(
 			[".cache", ".gocache", ".gomodcache", ".pytest_cache", "node_modules"].map(directory =>
 				fs.mkdir(path.join(root, directory), { recursive: true }),
@@ -585,12 +591,12 @@ describe("permission policy", () => {
 	});
 
 	test("git fingerprints detect content changes even when dirty status and file size stay the same", async () => {
-		const workspace = await temporaryDirectory("longtime-git-fingerprint-");
+		const workspace = await temporaryDirectory("looongtime-git-fingerprint-");
 		await Bun.write(path.join(workspace, "result.ts"), "export const result = 0;\n");
 		for (const args of [
 			["init"],
 			["add", "result.ts"],
-			["-c", "user.name=Longtime Test", "-c", "user.email=test@example.invalid", "commit", "-m", "initial"],
+			["-c", "user.name=Looongtime Test", "-c", "user.email=test@example.invalid", "commit", "-m", "initial"],
 		]) {
 			const result = Bun.spawnSync(["git", ...args], { cwd: workspace, stdout: "ignore", stderr: "pipe" });
 			if (result.exitCode !== 0) throw new Error(result.stderr.toString());
@@ -604,7 +610,7 @@ describe("permission policy", () => {
 	});
 
 	test("non-git fingerprints hash content even when size and timestamps are preserved", async () => {
-		const workspace = await temporaryDirectory("longtime-content-fingerprint-");
+		const workspace = await temporaryDirectory("looongtime-content-fingerprint-");
 		const file = path.join(workspace, "result.txt");
 		await Bun.write(file, "before");
 		const opened = await Workspace.open(workspace);
@@ -617,13 +623,13 @@ describe("permission policy", () => {
 	});
 
 	test("workspace fingerprints hash symlink text without reading an external target", async () => {
-		const workspace = await temporaryDirectory("longtime-symlink-fingerprint-");
-		const outside = await temporaryDirectory("longtime-symlink-target-");
+		const workspace = await temporaryDirectory("looongtime-symlink-fingerprint-");
+		const outside = await temporaryDirectory("looongtime-symlink-target-");
 		await Bun.write(path.join(workspace, "tracked.txt"), "tracked\n");
 		for (const args of [
 			["init"],
 			["add", "tracked.txt"],
-			["-c", "user.name=Longtime Test", "-c", "user.email=test@example.invalid", "commit", "-m", "initial"],
+			["-c", "user.name=Looongtime Test", "-c", "user.email=test@example.invalid", "commit", "-m", "initial"],
 		]) {
 			const result = Bun.spawnSync(["git", ...args], { cwd: workspace, stdout: "ignore", stderr: "pipe" });
 			if (result.exitCode !== 0) throw new Error(result.stderr.toString());
@@ -639,7 +645,7 @@ describe("permission policy", () => {
 	});
 
 	test("rejects glob traversal and does not follow search symlinks outside the workspace", async () => {
-		const parent = await temporaryDirectory("longtime-glob-boundary-");
+		const parent = await temporaryDirectory("looongtime-glob-boundary-");
 		const workspace = path.join(parent, "workspace");
 		await fs.mkdir(workspace);
 		const secret = path.join(parent, "outside-secret.txt");
@@ -707,9 +713,9 @@ describe("permission policy", () => {
 	});
 
 	test("creates explicit current verification evidence for nonstandard tasks", async () => {
-		const workspace = await temporaryDirectory("longtime-explicit-verify-");
-		const home = await temporaryDirectory("longtime-explicit-verify-home-");
-		process.env.LONGTIME_HOME = home;
+		const workspace = await temporaryDirectory("looongtime-explicit-verify-");
+		const home = await temporaryDirectory("looongtime-explicit-verify-home-");
+		process.env.LOOONGTIME_HOME = home;
 		await Bun.write(path.join(workspace, "result.json"), '{"score":1}\n');
 		const state = createRunState({ objective: "produce result", workspace, model: selection });
 		state.mutationEpoch = 1;
@@ -736,7 +742,7 @@ describe("permission policy", () => {
 	});
 
 	test("rejects arbitrary successful commands as completion verification", async () => {
-		const workspace = await temporaryDirectory("longtime-untrusted-verify-");
+		const workspace = await temporaryDirectory("looongtime-untrusted-verify-");
 		const state = createRunState({ objective: "prove correctness", workspace, model: selection });
 		const repository = new RunRepository(workspace, state.id);
 		const verifyTool = (await createTools(workspace)).find(item => item.definition.name === "verify")!;
@@ -756,7 +762,7 @@ describe("permission policy", () => {
 	});
 
 	test("rejects transitive package scripts that mask a failing test command", async () => {
-		const workspace = await temporaryDirectory("longtime-masked-verify-");
+		const workspace = await temporaryDirectory("looongtime-masked-verify-");
 		await Bun.write(path.join(workspace, "package.json"), JSON.stringify({
 			scripts: { test: "npm run unit", unit: "bun test missing.test.ts || true" },
 		}));
@@ -779,7 +785,7 @@ describe("permission policy", () => {
 	});
 
 	test("rejects declared verification pipelines whose final process can hide failure", async () => {
-		const workspace = await temporaryDirectory("longtime-piped-verify-");
+		const workspace = await temporaryDirectory("looongtime-piped-verify-");
 		const command = "bun test | tee test.log";
 		const state = createRunState({
 			objective: "prove correctness",
@@ -805,7 +811,7 @@ describe("permission policy", () => {
 	});
 
 	test("rejects trivial declared commands and no-op package build scripts", async () => {
-		const workspace = await temporaryDirectory("longtime-trivial-verify-");
+		const workspace = await temporaryDirectory("looongtime-trivial-verify-");
 		await Bun.write(path.join(workspace, "package.json"), JSON.stringify({ scripts: { build: "echo built" } }));
 		const state = createRunState({
 			objective: "prove correctness",
@@ -833,16 +839,16 @@ describe("permission policy", () => {
 	});
 
 	test("does not confuse Bun's direct test runner with a package test script", async () => {
-		const workspace = await temporaryDirectory("longtime-bun-test-runner-");
+		const workspace = await temporaryDirectory("looongtime-bun-test-runner-");
 		await Bun.write(path.join(workspace, "package.json"), JSON.stringify({ scripts: { test: "echo package-noop" } }));
 		await expect(assertVerificationCommandSafe(workspace, "bun test")).resolves.toBeUndefined();
 		await expect(assertVerificationCommandSafe(workspace, "bun run test")).rejects.toThrow("trivial no-op");
 	});
 
 	test("rejects stale completion evidence during the report tool call", async () => {
-		const workspace = await temporaryDirectory("longtime-report-evidence-");
-		const home = await temporaryDirectory("longtime-report-evidence-home-");
-		process.env.LONGTIME_HOME = home;
+		const workspace = await temporaryDirectory("looongtime-report-evidence-");
+		const home = await temporaryDirectory("looongtime-report-evidence-home-");
+		process.env.LOOONGTIME_HOME = home;
 		const state = createRunState({ objective: "finish", workspace, model: selection });
 		const stale = addEvidence(state, {
 			kind: "observation",
@@ -914,7 +920,7 @@ describe("permission policy", () => {
 	});
 
 	test("captures large shell output without retaining or returning the full stream", async () => {
-		const workspace = await temporaryDirectory("longtime-shell-output-");
+		const workspace = await temporaryDirectory("looongtime-shell-output-");
 		const result = await runShell({
 			command: `bun -e 'process.stdout.write("BEGIN\\n" + "x".repeat(120000) + "\\nEND\\n")'`,
 			cwd: workspace,
@@ -930,7 +936,7 @@ describe("permission policy", () => {
 	});
 
 	test("terminates descendant processes when a shell command times out", async () => {
-		const workspace = await temporaryDirectory("longtime-shell-timeout-");
+		const workspace = await temporaryDirectory("looongtime-shell-timeout-");
 		const pidFile = path.join(workspace, "child.pid");
 		const result = await runShell({
 			command: `sleep 30 & child=$!; printf '%s' "$child" > ${JSON.stringify(pidFile)}; wait "$child"`,
@@ -946,7 +952,7 @@ describe("permission policy", () => {
 	});
 
 	test("keeps sandboxed build caches outside the source workspace", async () => {
-		const workspace = await temporaryDirectory("longtime-tool-cache-workspace-");
+		const workspace = await temporaryDirectory("looongtime-tool-cache-workspace-");
 		const result = await runShell({
 			command: 'printf "%s\\n%s\\n%s\\n" "$GOCACHE" "$GOMODCACHE" "$XDG_CACHE_HOME"',
 			cwd: workspace,
@@ -955,14 +961,14 @@ describe("permission policy", () => {
 			sandbox: false,
 		});
 		expect(result.exitCode).toBe(0);
-		expect(result.output).toContain(path.join(os.tmpdir(), "longtime-tool-cache"));
+		expect(result.output).toContain(path.join(os.tmpdir(), "looongtime-tool-cache"));
 		expect(result.output).not.toContain(workspace);
 	});
 
 	test("returns read hashes that can be passed directly to snapshot-checked writes", async () => {
-		const workspace = await temporaryDirectory("longtime-read-hash-");
-		const home = await temporaryDirectory("longtime-read-hash-home-");
-		process.env.LONGTIME_HOME = home;
+		const workspace = await temporaryDirectory("looongtime-read-hash-");
+		const home = await temporaryDirectory("looongtime-read-hash-home-");
+		process.env.LOOONGTIME_HOME = home;
 		await Bun.write(path.join(workspace, "value.txt"), "before\n");
 		const state = createRunState({ objective: "edit", workspace, model: selection });
 		const repository = new RunRepository(workspace, state.id);
@@ -987,7 +993,7 @@ describe("permission policy", () => {
 	});
 
 	test("inherits an outer Codex sandbox instead of nesting sandbox-exec", async () => {
-		const workspace = await temporaryDirectory("longtime-inherited-sandbox-");
+		const workspace = await temporaryDirectory("looongtime-inherited-sandbox-");
 		const previous = process.env.CODEX_SANDBOX;
 		process.env.CODEX_SANDBOX = "seatbelt";
 		try {
@@ -1009,9 +1015,9 @@ describe("permission policy", () => {
 	});
 
 	test("detects shell workspace mutations and invalidates earlier verification", async () => {
-		const workspace = await temporaryDirectory("longtime-shell-mutation-");
-		const home = await temporaryDirectory("longtime-shell-home-");
-		process.env.LONGTIME_HOME = home;
+		const workspace = await temporaryDirectory("looongtime-shell-mutation-");
+		const home = await temporaryDirectory("looongtime-shell-home-");
+		process.env.LOOONGTIME_HOME = home;
 		const state = createRunState({ objective: "write generated file", workspace, model: selection });
 		const staleTest = addEvidence(state, {
 			kind: "test",
@@ -1052,24 +1058,31 @@ describe("permission policy", () => {
 });
 
 describe("credential isolation", () => {
-	test("prefers Longtime configuration while accepting legacy Continuum environment aliases", async () => {
-		const current = await temporaryDirectory("longtime-current-home-");
-		const legacy = await temporaryDirectory("longtime-legacy-home-");
-		process.env.LONGTIME_HOME = current;
+	test("prefers Looongtime configuration while accepting legacy Longtime and Continuum environment aliases", async () => {
+		const current = await temporaryDirectory("looongtime-current-home-");
+		const longtime = await temporaryDirectory("looongtime-longtime-home-");
+		const legacy = await temporaryDirectory("looongtime-legacy-home-");
+		process.env.LOOONGTIME_HOME = current;
+		process.env.LONGTIME_HOME = longtime;
 		process.env.CONTINUUM_HOME = legacy;
-		process.env.LONGTIME_MODEL = "openai/gpt-current";
+		process.env.LOOONGTIME_MODEL = "openai/gpt-current";
+		process.env.LONGTIME_MODEL = "openai/gpt-longtime";
 		process.env.CONTINUUM_MODEL = "openai/gpt-legacy";
-		expect(longtimeHome()).toBe(current);
-		expect(longtimeModel()).toBe("openai/gpt-current");
+		expect(looongtimeHome()).toBe(current);
+		expect(looongtimeModel()).toBe("openai/gpt-current");
+		delete process.env.LOOONGTIME_HOME;
+		delete process.env.LOOONGTIME_MODEL;
+		expect(looongtimeHome()).toBe(longtime);
+		expect(looongtimeModel()).toBe("openai/gpt-longtime");
 		delete process.env.LONGTIME_HOME;
 		delete process.env.LONGTIME_MODEL;
-		expect(longtimeHome()).toBe(legacy);
-		expect(longtimeModel()).toBe("openai/gpt-legacy");
+		expect(looongtimeHome()).toBe(legacy);
+		expect(looongtimeModel()).toBe("openai/gpt-legacy");
 	});
 
 	test("persists provider credentials outside run events with owner-only permissions", async () => {
-		const home = await temporaryDirectory("longtime-credentials-");
-		process.env.LONGTIME_HOME = home;
+		const home = await temporaryDirectory("looongtime-credentials-");
+		process.env.LOOONGTIME_HOME = home;
 		const store = new FileCredentialStore();
 		await store.modify("example", async () => ({ type: "api_key", key: "test-secret" }));
 		expect(await store.read("example")).toEqual({ type: "api_key", key: "test-secret" });
@@ -1081,8 +1094,8 @@ describe("credential isolation", () => {
 	});
 
 	test("serializes credential updates across store instances without losing providers", async () => {
-		const home = await temporaryDirectory("longtime-credential-lock-");
-		process.env.LONGTIME_HOME = home;
+		const home = await temporaryDirectory("looongtime-credential-lock-");
+		process.env.LOOONGTIME_HOME = home;
 		const first = new FileCredentialStore();
 		const second = new FileCredentialStore();
 		await Promise.all([
@@ -1097,8 +1110,8 @@ describe("credential isolation", () => {
 	});
 
 	test("recovers an old corrupt credential lock without losing the update", async () => {
-		const home = await temporaryDirectory("longtime-corrupt-credential-lock-");
-		process.env.LONGTIME_HOME = home;
+		const home = await temporaryDirectory("looongtime-corrupt-credential-lock-");
+		process.env.LOOONGTIME_HOME = home;
 		const lock = path.join(home, "credentials.json.lock");
 		await Bun.write(lock, "{partial");
 		const old = new Date(Date.now() - 10_000);
@@ -1110,10 +1123,10 @@ describe("credential isolation", () => {
 	});
 
 	test("imports an existing Codex CLI ChatGPT login without exposing tokens", async () => {
-		const home = await temporaryDirectory("longtime-import-home-");
-		const codexHome = await temporaryDirectory("longtime-codex-home-");
+		const home = await temporaryDirectory("looongtime-import-home-");
+		const codexHome = await temporaryDirectory("looongtime-codex-home-");
 		const previousCodexHome = process.env.CODEX_HOME;
-		process.env.LONGTIME_HOME = home;
+		process.env.LOOONGTIME_HOME = home;
 		process.env.CODEX_HOME = codexHome;
 		const payload = Buffer.from(JSON.stringify({ exp: Math.floor(Date.now() / 1_000) + 3_600 })).toString("base64url");
 		await Bun.write(
@@ -1145,9 +1158,9 @@ describe("durable long-run state", () => {
 	});
 
 	test("falls back to the previous atomic snapshot when the current snapshot is corrupt", async () => {
-		const workspace = await temporaryDirectory("longtime-backup-workspace-");
-		const home = await temporaryDirectory("longtime-backup-home-");
-		process.env.LONGTIME_HOME = home;
+		const workspace = await temporaryDirectory("looongtime-backup-workspace-");
+		const home = await temporaryDirectory("looongtime-backup-home-");
+		process.env.LOOONGTIME_HOME = home;
 		const state = createRunState({ objective: "recover state", workspace, model: selection });
 		const repository = new RunRepository(workspace, state.id);
 		await repository.save(state);
@@ -1233,9 +1246,9 @@ describe("durable long-run state", () => {
 	});
 
 	test("prevents two processes from owning the same run and recovers after release", async () => {
-		const workspace = await temporaryDirectory("longtime-lease-workspace-");
-		const home = await temporaryDirectory("longtime-lease-home-");
-		process.env.LONGTIME_HOME = home;
+		const workspace = await temporaryDirectory("looongtime-lease-workspace-");
+		const home = await temporaryDirectory("looongtime-lease-home-");
+		process.env.LOOONGTIME_HOME = home;
 		const state = createRunState({ objective: "lease", workspace, model: selection });
 		const repository = new RunRepository(workspace, state.id);
 		const first = await repository.acquireLease();
@@ -1246,9 +1259,9 @@ describe("durable long-run state", () => {
 	});
 
 	test("does not steal a live lease while its record is still being initialized", async () => {
-		const workspace = await temporaryDirectory("longtime-initializing-lease-workspace-");
-		const home = await temporaryDirectory("longtime-initializing-lease-home-");
-		process.env.LONGTIME_HOME = home;
+		const workspace = await temporaryDirectory("looongtime-initializing-lease-workspace-");
+		const home = await temporaryDirectory("looongtime-initializing-lease-home-");
+		process.env.LOOONGTIME_HOME = home;
 		const state = createRunState({ objective: "lease race", workspace, model: selection });
 		const repository = new RunRepository(workspace, state.id);
 		await fs.mkdir(repository.runDirectory, { recursive: true });
@@ -1266,9 +1279,9 @@ describe("durable long-run state", () => {
 	});
 
 	test("recovers a run lease left by a dead process", async () => {
-		const workspace = await temporaryDirectory("longtime-dead-lease-workspace-");
-		const home = await temporaryDirectory("longtime-dead-lease-home-");
-		process.env.LONGTIME_HOME = home;
+		const workspace = await temporaryDirectory("looongtime-dead-lease-workspace-");
+		const home = await temporaryDirectory("looongtime-dead-lease-home-");
+		process.env.LOOONGTIME_HOME = home;
 		const state = createRunState({ objective: "dead lease", workspace, model: selection });
 		const repository = new RunRepository(workspace, state.id);
 		await fs.mkdir(repository.runDirectory, { recursive: true });
@@ -1283,9 +1296,9 @@ describe("durable long-run state", () => {
 	});
 
 	test("reconciles event sequence after a crash and ignores only a truncated tail", async () => {
-		const workspace = await temporaryDirectory("longtime-event-tail-workspace-");
-		const home = await temporaryDirectory("longtime-event-tail-home-");
-		process.env.LONGTIME_HOME = home;
+		const workspace = await temporaryDirectory("looongtime-event-tail-workspace-");
+		const home = await temporaryDirectory("looongtime-event-tail-home-");
+		process.env.LOOONGTIME_HOME = home;
 		const state = createRunState({ objective: "events", workspace, model: selection });
 		const repository = new RunRepository(workspace, state.id);
 		await repository.save(state);
@@ -1316,7 +1329,7 @@ describe("pi-ai provider bridge", () => {
 	});
 
 	test("streams a tool call through the neutral model port", async () => {
-		const faux = fauxProvider({ provider: "faux-longtime", models: [{ id: "model" }] });
+		const faux = fauxProvider({ provider: "faux-looongtime", models: [{ id: "model" }] });
 		const models = createModels();
 		models.setProvider(faux.provider);
 		let observedSessionId: string | undefined;
@@ -1341,7 +1354,7 @@ describe("pi-ai provider bridge", () => {
 		]);
 		const port = new PiModelsPort(models);
 		const result = await port.runRound({
-			model: { provider: "faux-longtime", modelId: "model", reasoning: "low" },
+			model: { provider: "faux-looongtime", modelId: "model", reasoning: "low" },
 			sessionId: "run-session",
 			systemPrompt: "system",
 			userPrompt: "task",
@@ -1511,15 +1524,15 @@ describe("pi-ai provider bridge", () => {
 
 describe("long-running harness", () => {
 	test("returns a stable not-found error when no run store exists", async () => {
-		const home = await temporaryDirectory("longtime-empty-home-");
-		process.env.LONGTIME_HOME = home;
+		const home = await temporaryDirectory("looongtime-empty-home-");
+		process.env.LOOONGTIME_HOME = home;
 		await expect(RunRepository.find("missing-run")).rejects.toThrow("Run 'missing-run' was not found.");
 	});
 
-	test("invalidates proof when the workspace changed outside Longtime before resume", async () => {
-		const workspace = await temporaryDirectory("longtime-external-change-workspace-");
-		const home = await temporaryDirectory("longtime-external-change-home-");
-		process.env.LONGTIME_HOME = home;
+	test("invalidates proof when the workspace changed outside Looongtime before resume", async () => {
+		const workspace = await temporaryDirectory("looongtime-external-change-workspace-");
+		const home = await temporaryDirectory("looongtime-external-change-home-");
+		process.env.LOOONGTIME_HOME = home;
 		await Bun.write(path.join(workspace, "result.ts"), "export const result = 1;\n");
 		const state = createRunState({
 			objective: "keep result correct",
@@ -1557,9 +1570,9 @@ describe("long-running harness", () => {
 	});
 
 	test("continues across productive rounds and commits only after current verification", async () => {
-		const workspace = await temporaryDirectory("longtime-workspace-");
-		const home = await temporaryDirectory("longtime-home-");
-		process.env.LONGTIME_HOME = home;
+		const workspace = await temporaryDirectory("looongtime-workspace-");
+		const home = await temporaryDirectory("looongtime-home-");
+		process.env.LOOONGTIME_HOME = home;
 		await Bun.write(
 			path.join(workspace, "smoke.test.ts"),
 			'import { expect, test } from "bun:test"; test("smoke", () => expect(1).toBe(1));',
@@ -1625,9 +1638,9 @@ describe("long-running harness", () => {
 	});
 
 	test("blocks only after the configured number of no-progress rounds", async () => {
-		const workspace = await temporaryDirectory("longtime-stall-workspace-");
-		const home = await temporaryDirectory("longtime-stall-home-");
-		process.env.LONGTIME_HOME = home;
+		const workspace = await temporaryDirectory("looongtime-stall-workspace-");
+		const home = await temporaryDirectory("looongtime-stall-home-");
+		process.env.LOOONGTIME_HOME = home;
 		const model = new ScriptedModel([]);
 		const state = createRunState({
 			objective: "impossible task",
@@ -1649,9 +1662,9 @@ describe("long-running harness", () => {
 	});
 
 	test("preserves actionable completion-rejection guidance for out-of-scope unknowns", async () => {
-		const workspace = await temporaryDirectory("longtime-unknown-guidance-workspace-");
-		const home = await temporaryDirectory("longtime-unknown-guidance-home-");
-		process.env.LONGTIME_HOME = home;
+		const workspace = await temporaryDirectory("looongtime-unknown-guidance-workspace-");
+		const home = await temporaryDirectory("looongtime-unknown-guidance-home-");
+		process.env.LOOONGTIME_HOME = home;
 		const model = new ScriptedModel([
 			async request => {
 				const inspected = await request.executeTool({ id: "list", name: "list_files", arguments: {} });
@@ -1684,9 +1697,9 @@ describe("long-running harness", () => {
 	});
 
 	test("retries transient model failures with durable health events", async () => {
-		const workspace = await temporaryDirectory("longtime-retry-workspace-");
-		const home = await temporaryDirectory("longtime-retry-home-");
-		process.env.LONGTIME_HOME = home;
+		const workspace = await temporaryDirectory("looongtime-retry-workspace-");
+		const home = await temporaryDirectory("looongtime-retry-home-");
+		process.env.LOOONGTIME_HOME = home;
 		const model = new ScriptedModel([
 			async () => {
 				throw new Error("503 upstream temporarily unavailable");
@@ -1721,9 +1734,9 @@ describe("long-running harness", () => {
 	});
 
 	test("blocks during a model round when the cost hard limit is reached", async () => {
-		const workspace = await temporaryDirectory("longtime-cost-budget-workspace-");
-		const home = await temporaryDirectory("longtime-cost-budget-home-");
-		process.env.LONGTIME_HOME = home;
+		const workspace = await temporaryDirectory("looongtime-cost-budget-workspace-");
+		const home = await temporaryDirectory("looongtime-cost-budget-home-");
+		process.env.LOOONGTIME_HOME = home;
 		const model = new ScriptedModel([
 			async request => {
 				await request.onUsage?.({ ...emptyUsage(), inputTokens: 10, outputTokens: 10, costUsd: 2 });
@@ -1745,9 +1758,9 @@ describe("long-running harness", () => {
 	});
 
 	test("fails fast on deterministic authentication errors", async () => {
-		const workspace = await temporaryDirectory("longtime-auth-failure-workspace-");
-		const home = await temporaryDirectory("longtime-auth-failure-home-");
-		process.env.LONGTIME_HOME = home;
+		const workspace = await temporaryDirectory("looongtime-auth-failure-workspace-");
+		const home = await temporaryDirectory("looongtime-auth-failure-home-");
+		process.env.LOOONGTIME_HOME = home;
 		const model = new ScriptedModel([
 			async () => {
 				throw new Error("401 invalid bearer token");
@@ -1767,9 +1780,9 @@ describe("long-running harness", () => {
 	});
 
 	test("checkpoints an interrupted one-shot run as paused instead of failed", async () => {
-		const workspace = await temporaryDirectory("longtime-pause-workspace-");
-		const home = await temporaryDirectory("longtime-pause-home-");
-		process.env.LONGTIME_HOME = home;
+		const workspace = await temporaryDirectory("looongtime-pause-workspace-");
+		const home = await temporaryDirectory("looongtime-pause-home-");
+		process.env.LOOONGTIME_HOME = home;
 		const controller = new AbortController();
 		const model = new ScriptedModel([
 			async request => {
@@ -1815,9 +1828,9 @@ describe("long-running harness", () => {
 	});
 
 	test("cuts off identical tool-call loops inside a model round", async () => {
-		const workspace = await temporaryDirectory("longtime-repeat-workspace-");
-		const home = await temporaryDirectory("longtime-repeat-home-");
-		process.env.LONGTIME_HOME = home;
+		const workspace = await temporaryDirectory("looongtime-repeat-workspace-");
+		const home = await temporaryDirectory("looongtime-repeat-home-");
+		process.env.LOOONGTIME_HOME = home;
 		const model = new ScriptedModel([
 			async request => {
 				let last: Awaited<ReturnType<ModelRoundRequest["executeTool"]>> | undefined;
@@ -1845,9 +1858,9 @@ describe("long-running harness", () => {
 
 describe("minimal shadow semantic auditor", () => {
 	test("can use a distinct model in a fresh read-only snapshot without blocking completion", async () => {
-		const workspace = await temporaryDirectory("longtime-semantic-audit-workspace-");
-		const home = await temporaryDirectory("longtime-semantic-audit-home-");
-		process.env.LONGTIME_HOME = home;
+		const workspace = await temporaryDirectory("looongtime-semantic-audit-workspace-");
+		const home = await temporaryDirectory("looongtime-semantic-audit-home-");
+		process.env.LOOONGTIME_HOME = home;
 		await Bun.write(path.join(workspace, "README.md"), "This guide assumes expert knowledge.\n");
 		const model = new ScriptedModel([
 			async request => {
@@ -1960,9 +1973,9 @@ describe("minimal shadow semantic auditor", () => {
 	});
 
 	test("downgrades a pass when the audit snapshot omits an oversized file", async () => {
-		const workspace = await temporaryDirectory("longtime-incomplete-audit-workspace-");
-		const home = await temporaryDirectory("longtime-incomplete-audit-home-");
-		process.env.LONGTIME_HOME = home;
+		const workspace = await temporaryDirectory("looongtime-incomplete-audit-workspace-");
+		const home = await temporaryDirectory("looongtime-incomplete-audit-home-");
+		process.env.LOOONGTIME_HOME = home;
 		await Bun.write(path.join(workspace, "README.md"), "The documented criterion appears satisfied.\n");
 		const oversized = path.join(workspace, "oversized.bin");
 		await Bun.write(oversized, "");

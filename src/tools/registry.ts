@@ -36,7 +36,7 @@ function boundedToolText(value: string): string {
 async function atomicWriteWorkspaceFile(file: string, content: string, mode?: number): Promise<void> {
 	const directory = path.dirname(file);
 	await fs.mkdir(directory, { recursive: true });
-	const temporary = path.join(directory, `.${path.basename(file)}.${crypto.randomUUID()}.longtime-tmp`);
+	const temporary = path.join(directory, `.${path.basename(file)}.${crypto.randomUUID()}.looongtime-tmp`);
 	const handle = await fs.open(temporary, "wx", mode ?? 0o666);
 	let renamed = false;
 	try {
@@ -128,7 +128,7 @@ export async function createTools(root: string): Promise<ExecutableTool[]> {
 	const listFiles: ExecutableTool = {
 		definition: {
 			name: "list_files",
-			description: "List workspace files matching a glob. node_modules, .git, .longtime, and .continuum are excluded.",
+			description: "List workspace files matching a glob. node_modules, .git, .looongtime, and .continuum are excluded.",
 			parameters: Type.Object({
 				pattern: Type.Optional(Type.String({ maxLength: 1_000 })),
 				limit: Type.Optional(Type.Number({ minimum: 1, maximum: 5000 })),
@@ -156,7 +156,7 @@ export async function createTools(root: string): Promise<ExecutableTool[]> {
 					if (
 						relative.startsWith(".git/") ||
 						relative.startsWith("node_modules/") ||
-						relative.startsWith(".longtime/") ||
+						relative.startsWith(".looongtime/") ||
 						relative.startsWith(".continuum/")
 					)
 						continue;
@@ -221,7 +221,7 @@ export async function createTools(root: string): Promise<ExecutableTool[]> {
 					if (
 						relative.startsWith(".git/") ||
 						relative.startsWith("node_modules/") ||
-						relative.startsWith(".longtime/") ||
+						relative.startsWith(".looongtime/") ||
 						relative.startsWith(".continuum/")
 					)
 						continue;

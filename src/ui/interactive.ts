@@ -96,7 +96,7 @@ export async function runInteractive(options: InteractiveOptions): Promise<void>
 
 	const updateHeader = (): void => {
 		header.setText(
-			`${ansi.bold("Longtime")}  ${selectedModel ? `${selectedModel.provider}/${selectedModel.modelId}` : "no model"}  ${permissionMode}  audit:${semanticAuditMode}  network:${allowNetwork ? "on" : "off"}${allowHighRisk ? "  high-risk authorized" : ""}`,
+			`${ansi.bold("Looongtime")}  ${selectedModel ? `${selectedModel.provider}/${selectedModel.modelId}` : "no model"}  ${permissionMode}  audit:${semanticAuditMode}  network:${allowNetwork ? "on" : "off"}${allowHighRisk ? "  high-risk authorized" : ""}`,
 		);
 		tui.requestRender();
 	};

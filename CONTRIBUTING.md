@@ -1,6 +1,6 @@
 # Contributing
 
-Longtime is an early-stage security-sensitive agent harness. Changes should preserve deterministic state transitions, evidence provenance, and safe failure behavior.
+Looongtime is an early-stage security-sensitive agent harness. Changes should preserve deterministic state transitions, evidence provenance, and safe failure behavior.
 
 ## Development
 

@@ -166,7 +166,7 @@ async function selectAuthType(
 export async function runAuthCommand(port: PiModelsPort, args: string[]): Promise<void> {
 	const [action, providerId, rawType] = args;
 	if (action === "list") {
-		if (providerId || rawType) throw new Error("Usage: longtime auth list");
+		if (providerId || rawType) throw new Error("Usage: looongtime auth list");
 		process.stdout.write("PROVIDER\tMODELS\tAPI KEY\tOAUTH\n");
 		for (const provider of port.listAuthProviders()) {
 			process.stdout.write(
@@ -176,13 +176,13 @@ export async function runAuthCommand(port: PiModelsPort, args: string[]): Promis
 		return;
 	}
 	if (action === "import-codex") {
-		if (providerId || rawType) throw new Error("Usage: longtime auth import-codex");
+		if (providerId || rawType) throw new Error("Usage: looongtime auth import-codex");
 		await importCodexCliAuth();
 		process.stdout.write("Imported the current Codex CLI ChatGPT OAuth session for openai-codex.\n");
 		return;
 	}
 	if (!action || !providerId) {
-		throw new Error("Usage: longtime auth list | longtime auth <status|login|logout> <provider> [api_key|oauth]");
+		throw new Error("Usage: looongtime auth list | looongtime auth <status|login|logout> <provider> [api_key|oauth]");
 	}
 	if (action === "status") {
 		const status = await port.authStatus(providerId);

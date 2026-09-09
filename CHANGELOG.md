@@ -4,6 +4,7 @@
 
 ### Changed
 
+- Renamed the project to Looongtime: the CLI binary is now `looongtime`, configuration reads `LOOONGTIME_HOME`/`LOOONGTIME_MODEL`, and state lives in `~/.looongtime`. `~/.longtime` and the `LONGTIME_*` variables are still honoured as legacy fallbacks, ahead of the older Continuum aliases.
 - Goal Contracts now retain the original objective alongside additive hard requirements, constraints, and locked task-specific verification commands.
 - Locked constraints are compiled into required proof criteria rather than remaining advisory prompt text; host risk routing prevents executors from downgrading them.
 - Empty or oversized Goal Contracts are rejected, and resume now rejects attempts to silently change the locked workspace, requirements, constraints, or verification commands.

@@ -6,7 +6,7 @@ import type {
 	CredentialInfo,
 	CredentialStore,
 } from "@earendil-works/pi-ai";
-import { longtimeHome } from "../paths";
+import { looongtimeHome } from "../paths";
 
 interface CredentialFile {
 	version: 1;
@@ -16,7 +16,7 @@ interface CredentialFile {
 const CORRUPT_LOCK_GRACE_MS = 5_000;
 
 function credentialPath(): string {
-	return path.join(longtimeHome(), "credentials.json");
+	return path.join(looongtimeHome(), "credentials.json");
 }
 
 function credentialLockPath(): string {
@@ -118,7 +118,7 @@ export class FileCredentialStore implements CredentialStore {
 		try {
 			const parsed = (await Bun.file(credentialPath()).json()) as CredentialFile;
 			if (parsed.version !== 1 || typeof parsed.credentials !== "object") {
-				throw new Error("Unsupported Longtime credential file.");
+				throw new Error("Unsupported Looongtime credential file.");
 			}
 			return parsed;
 		} catch (error) {
