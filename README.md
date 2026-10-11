@@ -1,13 +1,9 @@
 # looongtime-agent
 
-> Long-horizon execution for coding agents, with durable state and verifiable completion.
-> 面向 Coding Agent 的长程执行、持久状态与可验证完成。
+> Long-horizon execution harness for coding agents, featuring durable task state and verifiable completion.  
+> 面向 Coding Agent 的长程任务执行框架：提供状态持久化、断点恢复与基于外部证据的完成判定。
 
 [简体中文](#简体中文) · [English](#english) · [Architecture / 架构](docs/architecture.md)
-
-Looongtime 是一个面向长程软件工程任务的 Agent Harness。它将模型交互与持久任务状态、执行证据和完成判定解耦，使 Agent 能够跨多轮持续工作、在中断后恢复，并以当前证据而非模型自述作为完成依据。
-
-Looongtime is a long-horizon execution harness for software-engineering agents. It separates model interaction from durable task state, execution evidence, and completion policy so an agent can work across many rounds, recover from interruption, and finish on current evidence rather than self-reported success.
 
 ---
 
@@ -15,37 +11,28 @@ Looongtime is a long-horizon execution harness for software-engineering agents. 
 
 ## 简体中文
 
-### 概览
+### 背景与解决的问题
 
-长程任务需要处理的不只是上下文窗口，还包括状态持久化、证据时效、重复探索、暂时性故障和可复核的完成标准。仅延长对话或增加循环次数，无法解决这些运行时问题。
+长程软件工程任务（Long-horizon tasks）无法仅靠扩大模型的上下文窗口或简单增加运行循环来解决。在实际长耗时运行中，Agent 普遍面临三个运行时问题：
 
-Looongtime 将任务组织为可恢复的执行 Frontier，并维护 `Requirement → Claim → Evidence` 证明图：
+1. **中断恢复成本高**：进程因异常、超时或系统重启中断后，缺少结构化的任务状态落盘，往往只能从头重跑；
+2. **完成判定的自述幻觉**：任务是否完成如果依赖模型自身的自然语言汇报，容易出现“模型宣称已实现，但实际测试未能通过”的伪完成现象；
+3. **证据的过期与失效**：Agent 在修改后续模块时可能破坏前序已验证的代码，若缺少证据依赖追踪，早期的验证结论会掩盖新产生的回归错误。
 
-```text
-Goal Contract
-  → compile relevant verified state
-  → execute one bounded frontier
-  → collect host evidence
-  → accept or reject the state delta
-  → continue while verified progress is positive
-```
+Looongtime 将模型交互逻辑与底层的**任务运行时状态、执行证据收集、完成裁决策略**解耦，确保长时间运行是由可复查的真实进展驱动。
 
-模型负责探索、推理与实现；Harness 负责状态提交、证据失效、预算控制、故障恢复与完成裁决。长时间运行由可信进展驱动，而不是由固定轮数或单次完成声明驱动。
+### 核心机制
 
-### 核心能力
+- **任务状态持久化与原子恢复**：采用原子状态快照结合追加式 Event Log，记录任务 Frontier；进程崩溃或主动暂停后，可基于当前 Goal Contract 与已验证状态直接恢复，无需回放完整对话。
+- **证据驱动的完成判定**：普通 Shell 输出仅作为诊断参考。修复或实现类目标，必须由绑定的 `verify` 测试命令输出真实通过结果，并确认工作区产生有效的净代码变更，Harness 才会判定任务完成。
+- **ProofGraph 依赖图与自动失效**：将任务目标拆解为 `Requirement → Claim → Evidence` 依赖链。当工作区相关文件发生改动时，自动将对应证明标记为失效，触发重新验证，避免回归盲区。
+- **预算与执行治理**：对 Token 消耗、活跃执行时间、循环轮次、单轮超时及停滞（Stall）状态分别设置有界配额，在持续无进展时安全阻塞并报警。
+- **语义审计（Semantic Audit）**：支持配置独立的 `--audit-model` 对高风险变更进行跨模型交叉审查，减少同模型因固有偏见产生的误判。
 
-- **长程调度**：只要存在可信状态增量就继续执行；持续停滞、预算耗尽或缺少必要权限时进入阻塞状态。
-- **完成判定**：普通 Shell 成功只作为诊断；修改工作区后，只有受识别或提前锁定的 `verify` 命令才能产生完成证据，并且必须映射到具体 Requirement；修复/实现类目标还必须保留相对初始指纹的净工作区变化。
-- **ProofGraph**：每个必需 Requirement 都需要受 Evidence 支持的 Claim；相关文件变化会使对应证明精确失效。
-- **故障恢复**：原子状态快照、前一快照备份、同步 Event Log、租约、心跳、暂停与跨进程恢复共同维护 Run 一致性；恢复和每轮开始时会检查外部工作区变化并失效旧证明。
-- **预算治理**：Token、费用、活跃时间、Round、工具调用、单轮超时、重试和停滞分别设限。
-- **权限策略**：工作区内可逆操作默认自主执行；高影响 Shell、边界外访问和外部副作用需要显式授权；本地沙箱默认禁网。
-- **语义审计**：`shadow` 只记录审计结果；`gate` 要求高风险语义完成获得当前 `pass` Verdict；可用 `--audit-model` 选择不同模型以减少共同盲点。
-- **多 Provider 接入**：模型与认证基于固定版本的 [`@earendil-works/pi-ai`](https://github.com/earendil-works/pi)，核心状态机不绑定单一模型协议。
+### 快速开始
 
-### 安装
-
-当前需要 Bun `1.3.14+`：
+#### 环境要求
+* Bun `1.3.14+`
 
 ```sh
 git clone https://github.com/GuanZhengPM/looongtime-agent.git
@@ -55,156 +42,72 @@ bun run check
 bun test
 ```
 
-从源码启动交互终端：
+#### 登录 Provider
+
+Looongtime 支持基于 OAuth 或 API Key 接入主流模型：
 
 ```sh
-bun src/cli.ts
-```
-
-当前提供源码运行方式，npm 发布尚未开放。
-
-### 快速开始
-
-先查看认证目录和模型：
-
-```sh
-bun src/cli.ts auth list
-bun src/cli.ts models openai-codex
-```
-
-使用 ChatGPT/Codex 订阅登录：
-
-```sh
+# 使用 ChatGPT / Codex 订阅登录
 bun src/cli.ts auth login openai-codex oauth
 bun src/cli.ts auth status openai-codex
+
+# 或直接配置 API Key
+bun src/cli.ts auth login openai api_key
+bun src/cli.ts auth login anthropic oauth
 ```
 
-运行一次任务：
+#### 启动长程任务
 
 ```sh
 bun src/cli.ts run \
   --model openai-codex/gpt-5.6-sol \
   --reasoning high \
-  --semantic-audit gate \
-  --audit-model anthropic/claude-sonnet-4-5 \
   --require "登录成功时返回有效 token" \
-  --constraint "不得改变公开 API" \
+  --constraint "不得修改公共 API 接口签名" \
   --verify-command "bun test auth.test.ts" \
   --require-change \
   --max-cost 25 \
   --cwd /path/to/project \
-  "修复认证模块并运行相关测试，直到有当前证据证明完成"
+  "修复认证模块并运行相关测试，直到有当前测试证据证明完成"
 ```
 
-### Provider 与认证
+#### 后台运行与恢复
 
-Looongtime 的认证入口与固定版本的 π Provider 目录对齐。使用统一的 `provider/model-id`，凭据不会写入 Run Event Log。
-
-| 使用场景 | Provider | 当前登录方式 | 示例 |
-| --- | --- | --- | --- |
-| Codex / ChatGPT 订阅 | `openai-codex` | ChatGPT OAuth | `auth login openai-codex oauth` |
-| OpenAI API | `openai` | API Key / `OPENAI_API_KEY` | `auth login openai api_key` |
-| Claude 模型 | `anthropic` | Anthropic API Key 或 Claude Pro/Max OAuth | `auth login anthropic oauth` |
-| Kimi Code Plan | `kimi-coding` | Kimi API Key 或订阅 OAuth | `auth login kimi-coding oauth` |
-| GLM Coding Plan 国际站 | `zai` | API Key / `ZAI_API_KEY` | `auth login zai api_key` |
-| GLM Coding Plan 国内站 | `zai-coding-cn` | API Key / `ZAI_CODING_CN_API_KEY` | `auth login zai-coding-cn api_key` |
-| Qwen Token Plan 国际站 | `qwen-token-plan` | API Key / `QWEN_TOKEN_PLAN_API_KEY` | `auth login qwen-token-plan api_key` |
-| Qwen Token Plan 国内站 | `qwen-token-plan-cn` | API Key / `QWEN_TOKEN_PLAN_CN_API_KEY` | `auth login qwen-token-plan-cn api_key` |
-| GitHub Copilot | `github-copilot` | Token 或订阅 OAuth | `auth login github-copilot oauth` |
-| OpenRouter | `openrouter` | API Key 或 OAuth | `auth login openrouter oauth` |
-
-完整目录以本地固定依赖为准：
+使用 `--detach` 可以在后台持久化运行，并获取独立的 Run ID：
 
 ```sh
-bun src/cli.ts auth list
-bun src/cli.ts models
-bun src/cli.ts models <provider>
-```
-
-认证边界：
-
-- `openai-codex` OAuth 对应 ChatGPT 订阅访问；`openai` API Key 对应 API 按量访问，两者不是同一计费入口。OpenAI 官方 Codex 客户端也区分这两种本地登录方式。
-- `anthropic` 当前是直接 API Key／订阅 OAuth，不是把 Claude Code CLI 当作子进程后端，也不会复用 Claude Code CLI 的自动刷新生命周期。
-- GLM、Qwen 当前按 π Provider 的 Coding/Token Plan API Key 接入；尚未实现从它们各自 CLI 自动导入登录态。
-- Provider 目录和模型可用性会随固定的 `pi-ai` 版本变化；升级依赖后建议重新运行认证和模型回归测试。
-
-如果本机 Codex CLI 已执行过 `codex login`，可以选择导入当前会话：
-
-```sh
-bun src/cli.ts auth import-codex
-```
-
-该兼容命令会将 Codex CLI 的 OAuth 凭据复制到 Looongtime 独立的 `0600` 文件。此方式依赖 Codex 本地凭据格式，两个客户端也可能共享 refresh token 生命周期；长期任务建议使用 `auth login openai-codex oauth` 建立独立会话。
-
-凭据默认保存在：
-
-```text
-~/.looongtime/credentials.json
-```
-
-可以通过 `LOOONGTIME_HOME` 修改存储根目录。macOS Keychain、系统密钥环和外部 SecretRef 尚未接入，已列入发布前安全工作。
-
-为兼容已有本地数据，若 `~/.looongtime` 尚不存在，Looongtime 会按 `~/.longtime`、`~/.continuum` 的顺序读取旧目录；`LONGTIME_HOME`/`LONGTIME_MODEL` 和 `CONTINUUM_HOME`/`CONTINUUM_MODEL` 也保留为兼容别名。新配置统一使用 `LOOONGTIME_HOME` 和 `LOOONGTIME_MODEL`。
-
-### 长程运行配置
-
-`--endurance` 配置的是 Run 级上限；显式 `--max-*` 参数会覆盖 Profile：
-
-| Profile | Token 硬上限 | 活跃执行时间 | Round | Tool calls |
-| --- | ---: | ---: | ---: | ---: |
-| `24h` | 100M | 24h | 4,000 | 25,000 |
-| `48h` | 250M | 48h | 8,000 | 50,000 |
-| `72h` | 500M | 72h | 12,000 | 75,000 |
-
-```sh
+# 后台启动 72 小时耐力模式
 bun src/cli.ts run \
   --detach \
   --endurance 72h \
   --model openai-codex/gpt-5.6-sol \
-  --reasoning high \
-  --permission autonomous \
   --cwd /path/to/dedicated-worktree \
-  "完成 TASK.md，持续测试和修复，直到证据化完成"
-```
+  "实现 TASK.md 所述功能并确保所有测试通过"
 
-`--detach` 会返回 Run ID、后台 PID 和 `runner.log`。Profile 中的小时数统计模型与工具活跃时间；休眠和退避等待不消耗该预算。高风险命令在无 TTY 后台默认拒绝，只有在专用、可恢复工作区中才应考虑 `--allow-high-risk`。
-
-### 恢复与检查
-
-```sh
+# 查看运行状态与事件流
 bun src/cli.ts status <run-id>
 bun src/cli.ts events <run-id>
+
+# 中断后继续执行（支持调整模型或预算配置）
 bun src/cli.ts resume <run-id>
-bun src/cli.ts resume --endurance 72h --max-stalls 12 <run-id>
 bun src/cli.ts resume --model openai/gpt-5.4 <run-id>
 ```
 
-恢复依赖 Goal Contract、Verified State、Evidence 和 Frontier，不要求模型记住此前完整对话。
+### 长程运行配额（Endurance Profiles）
+
+| Profile | Token 硬上限 | 活跃执行时间 | 最大轮次 (Round) | 最大工具调用数 |
+| :--- | ---: | ---: | ---: | ---: |
+| `24h` | 100M | 24 小时 | 4,000 | 25,000 |
+| `48h` | 250M | 48 小时 | 8,000 | 50,000 |
+| `72h` | 500M | 72 小时 | 12,000 | 75,000 |
+
+*注：时间仅统计模型推理与工具调用的实际活跃时间，等待与退避重试不消耗活跃时长。*
 
 ### 安全边界
 
-- Looongtime 不是容器或虚拟机；它默认拥有启动用户在工作区内的权限。
-- 路径和符号链接会做工作区边界检查，但强隔离仍应由容器、VM 或专用系统账户提供。
-- 支持的本地沙箱默认禁止网络；只有显式 `--allow-network` 才会开放，恢复 Run 时可用 `--deny-network` 再次关闭。继承的外层沙箱仍以外层策略为准。
-- Shell 环境不会继承 Provider Secret，本地沙箱会屏蔽常见凭据目录及 `~/.looongtime`；这仍不能替代容器或 VM。
-- `runner.log`、状态和 Event Log 可能包含源码片段、命令与模型输出，不应提交到公开仓库。
-- `--allow-high-risk` 是显式预授权，不应在包含真实凭据或不可恢复数据的工作区使用。
-- `auth status` 当前只确认凭据存在且可解析／可刷新；首个模型请求才验证服务端是否接受。
-
-### 开发验证
-
-提交变更前运行：
-
-```sh
-bun run check
-bun test
-bun src/cli.ts --help
-bun src/cli.ts auth list
-```
-
-### 致谢
-
-Looongtime 的 Provider/TUI 基础来自 [Pi Agent Harness](https://github.com/earendil-works/pi)。README 的 Provider 发现、认证状态和安全文档组织参考了 [OpenClaw](https://github.com/openclaw/openclaw)。Looongtime 自己的重点是长程任务的 durable state、ProofGraph、失效语义、进度治理和可恢复执行。
+1. Looongtime 默认在启动用户的权限下运行，隔离级别依赖操作系统的用户与工作区权限；强安全隔离需配合 Docker 或专用 VM。
+2. 本地沙箱默认禁用网络访问，仅在显式传入 `--allow-network` 时开放。
+3. 凭据文件保存在 `~/.looongtime/credentials.json`（权限 `0600`），不会被写入任务的公共 Event Log。
 
 ---
 
@@ -214,35 +117,39 @@ Looongtime 的 Provider/TUI 基础来自 [Pi Agent Harness](https://github.com/e
 
 ### Overview
 
-Long-horizon work involves more than a larger context window: durable task state, evidence freshness, bounded exploration, transient-failure recovery, and completion criteria that can be independently reviewed.
+Looongtime is an execution harness designed for long-horizon software engineering tasks. It decouples model reasoning from persistent task state, execution evidence collection, and completion gating, enabling agents to operate across multiple rounds, recover reliably from interruptions, and verify success based on real execution outputs rather than self-reported claims.
 
-Looongtime organizes a run into recoverable execution frontiers and maintains a `Requirement → Claim → Evidence` proof graph:
+### Problem Statement & Background
+
+Long-horizon software engineering tasks cannot be solved simply by expanding context window limits or blindly increasing loop iterations. In practice, long-running agents face three fundamental operational challenges:
+
+1. **High Interruption Cost**: When an agent halts due to network timeouts, process failures, or system restarts, the lack of structured persistence forces the entire run to restart from scratch.
+2. **Self-Report Hallucinations**: When task completion relies on the model's natural language assertion, agents frequently claim "the feature is implemented" even when underlying tests fail.
+3. **Proof Staleness**: Edits made late in a session often break earlier components. Without dependency tracking, stale passing proofs can mask new regressions.
+
+Looongtime decouples model reasoning from **runtime task state, execution evidence collection, and completion gating**, ensuring long runs are driven solely by verifiable progress.
+
+### Core Architecture
 
 ```text
 Goal Contract
-  → compile relevant verified state
-  → execute one bounded frontier
-  → collect host evidence
-  → accept or reject the state delta
-  → continue while verified progress is positive
+  → Compile verified task state
+  → Execute bounded frontier
+  → Collect host test evidence
+  → Update ProofGraph (invalidate stale proofs upon file changes)
+  → Judge completion on Net Workspace Changes + Test Pass
 ```
 
-The model owns exploration, reasoning, and implementation. The harness owns state commits, evidence invalidation, budgets, recovery, and completion policy. Continued execution is driven by verified progress rather than a fixed turn count.
+* **Durable Task Checkpoints**: Combines atomic state snapshots with append-only Event Logs to record execution frontiers. Interrupted runs resume from the Goal Contract and verified state without replaying full conversational transcripts.
+* **Evidence-Gated Completion**: Standard Shell output serves purely as diagnostics. For repair or feature goals, completion requires designated `verify` commands to output genuine passing evidence alongside verified net workspace changes.
+* **ProofGraph & Dynamic Invalidation**: Deconstructs tasks into `Requirement → Claim → Evidence` chains. Whenever relevant workspace files are modified, dependent proofs are automatically marked stale, triggering re-verification.
+* **Budget & Execution Governance**: Enforces bounded budgets across token consumption, active wall-clock time, iteration rounds, single-round timeouts, and stall detection.
+* **Semantic Audit**: Supports cross-model verification via `--audit-model` to reduce blind spots on high-risk code changes.
 
-### What it provides
+### Quick Start
 
-- **Long-horizon scheduling**: continue while trusted state changes are being produced; block on sustained stalls, exhausted budgets, or missing authority.
-- **Completion policy**: ordinary Shell success is diagnostic only. After workspace mutation, completion requires recognized or contract-locked `verify` evidence mapped to each Requirement; fix/implement-style goals also require a net workspace change from the starting fingerprint.
-- **ProofGraph**: each required requirement needs a supported claim, and relevant mutations precisely invalidate stale proof.
-- **Durable recovery**: atomic snapshots, a previous-snapshot fallback, synchronized events, leases, heartbeats, pause, and workspace reconciliation preserve recoverability.
-- **Budget governance**: tokens, cost, active time, rounds, tool calls, round timeouts, retries, and stalls have separate limits.
-- **Permission policy**: reversible workspace-local actions run autonomously; high-impact operations require authority and local sandboxes deny network access by default.
-- **Semantic audit**: `shadow` records advisory results; `gate` requires a current passing verdict, and `--audit-model` can use a different model to reduce shared blind spots.
-- **Multi-provider integration**: model protocols and authentication come from a pinned [`@earendil-works/pi-ai`](https://github.com/earendil-works/pi) version while the durable state machine remains provider-neutral.
-
-### Install
-
-Bun `1.3.14+` is currently required:
+#### Requirements
+* Bun `1.3.14+`
 
 ```sh
 git clone https://github.com/GuanZhengPM/looongtime-agent.git
@@ -250,148 +157,75 @@ cd looongtime-agent
 bun install --ignore-scripts
 bun run check
 bun test
-bun src/cli.ts
 ```
 
-The project currently runs from source; npm distribution is not yet available.
+#### Provider Login
 
-### Quick start
-
-Inspect authentication methods and models:
+Connect via OAuth or API Key:
 
 ```sh
-bun src/cli.ts auth list
-bun src/cli.ts models openai-codex
-```
-
-Sign in with a ChatGPT/Codex subscription:
-
-```sh
+# Login via ChatGPT / Codex subscription OAuth
 bun src/cli.ts auth login openai-codex oauth
 bun src/cli.ts auth status openai-codex
+
+# Or configure direct API keys
+bun src/cli.ts auth login openai api_key
+bun src/cli.ts auth login anthropic oauth
 ```
 
-Run a task:
+#### Dispatching a Task
 
 ```sh
 bun src/cli.ts run \
   --model openai-codex/gpt-5.6-sol \
   --reasoning high \
-  --semantic-audit gate \
-  --audit-model anthropic/claude-sonnet-4-5 \
-  --require "successful login returns a valid token" \
-  --constraint "do not change the public API" \
+  --require "Return valid token upon successful login" \
+  --constraint "Do not modify public API signatures" \
   --verify-command "bun test auth.test.ts" \
   --require-change \
   --max-cost 25 \
   --cwd /path/to/project \
-  "Fix the authentication module and run the relevant tests until current evidence proves completion"
+  "Fix authentication regression and ensure tests pass"
 ```
 
-### Models and authentication
+#### Detached Execution & Resuming
 
-Looongtime exposes the authentication catalog of its pinned Pi provider layer. Models use one `provider/model-id` convention, and credentials are not written to run events.
-
-| Use case | Provider | Current authentication | Example |
-| --- | --- | --- | --- |
-| Codex / ChatGPT subscription | `openai-codex` | ChatGPT OAuth | `auth login openai-codex oauth` |
-| OpenAI API | `openai` | API key / `OPENAI_API_KEY` | `auth login openai api_key` |
-| Claude models | `anthropic` | Anthropic API key or Claude Pro/Max OAuth | `auth login anthropic oauth` |
-| Kimi Code Plan | `kimi-coding` | Kimi API key or subscription OAuth | `auth login kimi-coding oauth` |
-| GLM Coding Plan, international | `zai` | API key / `ZAI_API_KEY` | `auth login zai api_key` |
-| GLM Coding Plan, China | `zai-coding-cn` | API key / `ZAI_CODING_CN_API_KEY` | `auth login zai-coding-cn api_key` |
-| Qwen Token Plan, international | `qwen-token-plan` | API key / `QWEN_TOKEN_PLAN_API_KEY` | `auth login qwen-token-plan api_key` |
-| Qwen Token Plan, China | `qwen-token-plan-cn` | API key / `QWEN_TOKEN_PLAN_CN_API_KEY` | `auth login qwen-token-plan-cn api_key` |
-| GitHub Copilot | `github-copilot` | Token or subscription OAuth | `auth login github-copilot oauth` |
-| OpenRouter | `openrouter` | API key or OAuth | `auth login openrouter oauth` |
-
-Use the pinned local dependency as the source of truth:
+Use `--detach` to run long-running tasks in the background:
 
 ```sh
-bun src/cli.ts auth list
-bun src/cli.ts models
-bun src/cli.ts models <provider>
-```
-
-Authentication boundaries:
-
-- `openai-codex` OAuth is ChatGPT subscription access. `openai` API-key access is usage-based API access. They are separate authentication and billing paths.
-- `anthropic` currently means direct API-key or subscription OAuth access. Looongtime does not delegate inference to the Claude Code CLI and does not inherit the CLI's credential-refresh lifecycle.
-- GLM and Qwen currently use the Coding/Token Plan API-key routes exposed by Pi. Automatic import from their CLIs is not implemented.
-- Provider and model availability follows the pinned `pi-ai` dependency. An upgrade requires authentication and model regression testing.
-
-An optional compatibility command can copy an existing local Codex CLI session:
-
-```sh
-bun src/cli.ts auth import-codex
-```
-
-This copies the Codex CLI OAuth credential into Looongtime's independent `0600` file. The compatibility path depends on Codex's local credential format and may share refresh-token lifecycle across clients. For long-lived runs, prefer `auth login openai-codex oauth` to establish an independent session.
-
-Credentials are stored at `~/.looongtime/credentials.json` by default. `LOOONGTIME_HOME` changes the root. Keychain/system-keystore and external SecretRef support are not implemented yet.
-
-For backward compatibility, Looongtime falls back to `~/.longtime` and then `~/.continuum` when `~/.looongtime` does not yet exist. `LONGTIME_HOME`/`LONGTIME_MODEL` and `CONTINUUM_HOME`/`CONTINUUM_MODEL` remain accepted as legacy aliases; new configuration should use `LOOONGTIME_HOME` and `LOOONGTIME_MODEL`.
-
-### Endurance profiles
-
-`--endurance` configures run-level ceilings. Explicit `--max-*` flags override the profile:
-
-| Profile | Hard token limit | Active execution | Rounds | Tool calls |
-| --- | ---: | ---: | ---: | ---: |
-| `24h` | 100M | 24h | 4,000 | 25,000 |
-| `48h` | 250M | 48h | 8,000 | 50,000 |
-| `72h` | 500M | 72h | 12,000 | 75,000 |
-
-```sh
+# Launch in 72h endurance mode
 bun src/cli.ts run \
   --detach \
   --endurance 72h \
   --model openai-codex/gpt-5.6-sol \
-  --reasoning high \
-  --permission autonomous \
   --cwd /path/to/dedicated-worktree \
-  "Complete TASK.md, continuously test and repair, and stop only on evidence-gated completion"
-```
+  "Implement features in TASK.md and verify all tests pass"
 
-`--detach` returns a run ID, background PID, and `runner.log`. Profile hours count active model/tool time; sleep and retry backoff do not consume that budget. High-risk commands remain denied without a TTY unless `--allow-high-risk` is explicitly supplied in a dedicated, recoverable workspace.
-
-### Resume and inspect
-
-```sh
+# Check status and stream events
 bun src/cli.ts status <run-id>
 bun src/cli.ts events <run-id>
+
+# Resume an interrupted run (with optional budget/model adjustment)
 bun src/cli.ts resume <run-id>
-bun src/cli.ts resume --endurance 72h --max-stalls 12 <run-id>
 bun src/cli.ts resume --model openai/gpt-5.4 <run-id>
 ```
 
-Recovery compiles the Goal Contract, Verified State, Evidence, and Frontier. It does not rely on the model remembering the previous full conversation.
+### Endurance Profiles
 
-### Security boundary
+| Profile | Token Hard Cap | Active Execution Time | Max Rounds | Max Tool Calls |
+| :--- | ---: | ---: | ---: | ---: |
+| `24h` | 100M | 24 Hours | 4,000 | 25,000 |
+| `48h` | 250M | 48 Hours | 8,000 | 50,000 |
+| `72h` | 500M | 72 Hours | 12,000 | 75,000 |
 
-- Looongtime is not a container or VM; it runs with the launching user's permissions.
-- Workspace path and symlink checks are defense in depth, not strong isolation. Use a container, VM, or dedicated OS account for hostile tasks.
-- Supported local sandboxes deny network access by default; `--allow-network` is explicit and `--deny-network` revokes it on resume. An inherited outer sandbox retains its own policy.
-- Provider secrets are removed from the Shell environment and common credential directories are masked locally, but this is not a replacement for a container or VM.
-- State, events, and `runner.log` may contain source snippets, commands, and model output. Do not publish them blindly.
-- `--allow-high-risk` is explicit preauthorization and should not be used around irreplaceable data or real secrets.
-- `auth status` checks credential presence and local refreshability. The first model request is the current live server-side acceptance check.
+*Note: Execution time tracks active model inference and tool execution; sleep and backoff delays do not consume this budget.*
 
-### Development checks
+### Security Boundaries
 
-Run the following before submitting changes:
+1. Looongtime runs under the launching user's OS permissions. Strong sandboxing requires containerized or VM environments.
+2. Local sandboxes deny network access by default; access must be explicitly granted via `--allow-network`.
+3. Credentials are stored securely under `~/.looongtime/credentials.json` (mode `0600`) and are never written to the public Event Log.
 
-```sh
-bun run check
-bun test
-bun src/cli.ts --help
-bun src/cli.ts auth list
-```
+### License
 
-### Acknowledgements
-
-Looongtime builds its provider/TUI foundation on the [Pi Agent Harness](https://github.com/earendil-works/pi). Its provider discovery, auth status, and security-document organization are informed by [OpenClaw](https://github.com/openclaw/openclaw). Looongtime's own focus is long-horizon durable state, ProofGraph semantics, evidence invalidation, progress governance, and recoverable execution.
-
-## License
-
-No project license has been selected yet. Until a `LICENSE` file is added, the repository is source-visible but not an open-source release. This is intentionally left as an owner decision.
+[MIT](LICENSE)
